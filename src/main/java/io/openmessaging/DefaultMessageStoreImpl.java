@@ -179,14 +179,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int I_SUMH = 5;
     private static final int I_CNT  = 6;
     
-    private static final int H = 22; // max height of HEAP
+    private static final int H = 25; // max height of HEAP
     private static final int HEAP_ARRAY_SIZE = ((1 << (H + 1)) + 1);
     private static int indexHeap[] = new int[HEAP_ARRAY_SIZE * I_SIZE];
     private static final int HEAP_LEAF_BASE = 1 << H;
     
     private static AtomicIntegerArray blockCounter = new AtomicIntegerArray(1 << H);
     
-    private static final int L_PGSZ = 4096; // leaf-record block size
+    private static final int L_PGSZ = 4096 / 8; // leaf-record block size
     private static final int L_NREC = L_PGSZ / 8; // n-record in one block
     
 
