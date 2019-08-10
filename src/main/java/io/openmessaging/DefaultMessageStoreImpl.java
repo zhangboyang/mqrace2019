@@ -29,7 +29,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static long maxdiff = Long.MIN_VALUE;
     private static long mindiff = Long.MAX_VALUE;
     private static long sumdiff = 0;
-    private static boolean flag = false;
+    private static int flag = 0;
     private static long n = 0;
     private static int maxthread = 0;
     
@@ -39,15 +39,21 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static long minDiffTGlobal = Long.MAX_VALUE;
     {
     	Arrays.fill(minDiffT, Long.MAX_VALUE);
+    	System.out.println("ctor: " + new Date());
     }
     
     @Override
     public synchronized void put(Message message) {
-        /*if (!msgMap.containsKey(message.getT())) {
+    	/*if (!msgMap.containsKey(message.getT())) {
             msgMap.put(message.getT(), new ArrayList<Message>());
         }
 
         msgMap.get(message.getT()).add(message);*/
+    	
+    	if (flag == 0) {
+    		flag = 1;
+    		System.out.println("put: " + new Date());
+    	}
     	int tid = threadId.get();
     	
     	long diff = message.getT() - message.getA();
@@ -95,9 +101,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
         }
 
         return res;*/
-    	if (!flag) {
-    		flag = true;
-    		
+    	if (flag == 1) {
+    		flag = 2;
+    		System.out.println("getMessage: " + new Date());
     		System.out.println("maxdiff: " + maxdiff);
     		System.out.println("mindiff: " + mindiff);
     		System.out.println("N: " + n);
