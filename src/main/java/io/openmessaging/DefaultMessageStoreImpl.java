@@ -69,7 +69,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		ByteBuffer buffer = ByteBuffer.allocate(34);
     		buffer.put(bodyTemplate);
     		buffer.putLong(0, t);
-    		buffer.putLong(0, a);
+    		buffer.putLong(8, a);
     		return buffer.array();
     	}
     	public static long doCompress(Message message)
