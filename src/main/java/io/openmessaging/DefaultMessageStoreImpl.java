@@ -25,6 +25,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
     };
     private static final char[] HEX_ARRAY = "0123456789ABCDEF".toCharArray();
     
+    private static long maxdiff = Long.MIN_VALUE;
+    private static long mindiff = Long.MAX_VALUE;
+    private static boolean flag = false;
+    private static long n = 0;
+    private static int maxthread = 0;
     @Override
     public synchronized void put(Message message) {
         /*if (!msgMap.containsKey(message.getT())) {
@@ -33,21 +38,25 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
         msgMap.get(message.getT()).add(message);*/
     	
-    	if (ThreadLocalRandom.current().nextInt(10000) == 0) {
+    	long diff = message.getT() - message.getA();
+    	if (diff > maxdiff) maxdiff = diff;
+    	if (diff < mindiff) mindiff = diff;
+    	n++;
+    	
+    	if (threadId.get() + 1 > maxthread) maxthread = threadId.get() + 1;
+    	
+    	
+    	if (ThreadLocalRandom.current().nextInt(2500) == 0) {
 	    	StringBuilder s = new StringBuilder();
-	    	s.append(threadId.get());
-	    	s.append(',');
-	    	s.append(Long.toHexString(message.getA()));
-	    	s.append(',');
-	    	s.append(Long.toHexString(message.getT()));
-	    	s.append(',');
+	    	s.append(String.format("%04d,", threadId.get()));
+	    	s.append(String.format("%08X,", message.getT()));
+	    	s.append(String.format("%08X,", message.getA()));
 	    	byte[] bytes = message.getBody();
 	    	for (int j = 0; j < bytes.length; j++) {
 	            int v = bytes[j] & 0xFF;
 	            s.append(HEX_ARRAY[v >>> 4]);
 	            s.append(HEX_ARRAY[v & 0x0F]);
 	        }
-	    	
 	    	System.out.println(s);
     	}
     }
@@ -67,6 +76,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
         }
 
         return res;*/
+    	if (!flag) {
+    		flag = true;
+    		
+    		System.out.println("maxdiff: " + maxdiff);
+    		System.out.println("mindiff: " + mindiff);
+    		System.out.println("N: " + n);
+    		System.out.println("maxthread: " + maxthread);
+    	}
     	return new ArrayList<Message>();
     }
 
