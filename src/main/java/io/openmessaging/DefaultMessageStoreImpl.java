@@ -25,11 +25,22 @@ public class DefaultMessageStoreImpl extends MessageStore {
     };
     private static final char[] HEX_ARRAY = "0123456789ABCDEF".toCharArray();
     
+    
     private static long maxdiff = Long.MIN_VALUE;
     private static long mindiff = Long.MAX_VALUE;
+    private static long sumdiff = 0;
     private static boolean flag = false;
     private static long n = 0;
     private static int maxthread = 0;
+    
+    private static long lastThreadT[] = new long[100];
+    
+    private static long minDiffT[] = new long[100];
+    private static long minDiffTGlobal = Long.MAX_VALUE;
+    {
+    	Arrays.fill(minDiffT, Long.MAX_VALUE);
+    }
+    
     @Override
     public synchronized void put(Message message) {
         /*if (!msgMap.containsKey(message.getT())) {
@@ -37,18 +48,26 @@ public class DefaultMessageStoreImpl extends MessageStore {
         }
 
         msgMap.get(message.getT()).add(message);*/
+    	int tid = threadId.get();
     	
     	long diff = message.getT() - message.getA();
     	if (diff > maxdiff) maxdiff = diff;
     	if (diff < mindiff) mindiff = diff;
     	n++;
+    	sumdiff += Math.abs(diff);
     	
-    	if (threadId.get() + 1 > maxthread) maxthread = threadId.get() + 1;
+    	long diffT = message.getT() - lastThreadT[tid];
+    	lastThreadT[tid] = message.getT();
+    	minDiffT[tid] = Math.min(minDiffT[tid], diffT);
+    	minDiffTGlobal = Math.min(minDiffTGlobal, diffT);
     	
     	
-    	if (ThreadLocalRandom.current().nextInt(2500) == 0) {
+    	if (tid + 1 > maxthread) maxthread = tid + 1;
+    	
+    	
+    	if (ThreadLocalRandom.current().nextInt(10000) == 0) {
 	    	StringBuilder s = new StringBuilder();
-	    	s.append(String.format("%04d,", threadId.get()));
+	    	s.append(String.format("%04d,", tid));
 	    	s.append(String.format("%08X,", message.getT()));
 	    	s.append(String.format("%08X,", message.getA()));
 	    	byte[] bytes = message.getBody();
@@ -82,7 +101,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		System.out.println("maxdiff: " + maxdiff);
     		System.out.println("mindiff: " + mindiff);
     		System.out.println("N: " + n);
+    		System.out.println("avgDiff: " + (sumdiff / n));
     		System.out.println("maxthread: " + maxthread);
+    		System.out.println("minDiffTGlobal: " + minDiffTGlobal);
+    		for (int i = 0; i < maxthread; i++) {
+    			System.out.println("minDiffT: " + minDiffT[i]);
+    		}
     	}
     	return new ArrayList<Message>();
     }
