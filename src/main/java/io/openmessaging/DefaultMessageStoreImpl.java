@@ -129,6 +129,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final Method map0;
     
     private static final String MAPFILE = "/alidata1/race2019/data/mydata";
+    //private static final String MAPFILE = "storage.dat";
     private static final long MAPLEN = 4 * 1048576 * 4096L;
     private static final long mapBase;
     
@@ -159,8 +160,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			final FileChannel ch = backingFile.getChannel();
 			theBase = (long) map0.invoke(ch, 1, 0L, MAPLEN);
 		} catch (Exception e) {
-			theBase = -1;
 			e.printStackTrace();
+			theBase = 0;
+			System.exit(-1);
 		}
 		mapBase = theBase;
     }
@@ -254,6 +256,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	long msgz = MessageCompressor.doCompress(message);
     	
     	if (!MessageCompressor.isValid(msgz)) {
+    		System.out.println(MessageCompressor.dumpMessage(message));
     		haveUncompressibleRecord = true;
     		synchronized (uncompressibleRecords) {
     			uncompressibleRecords.add(message);
