@@ -94,7 +94,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	public static int extractT(long c)
     	{
-    		return (int)(c >> 32) & 0x7FFFFFFF;
+    		return (int)(c >> 32);
     	}
     	public static int extractA(long c)
     	{
@@ -107,7 +107,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		return new Message(extractT(m), extractA(m), buffer.array());*/
     		int t = extractT(m);
     		int a = extractA(m);
-    		return new Message(t, a, getBody(t, a));
+    		return new Message(a, t, getBody(t, a));
     	}
     	public static String dumpMessage(Message message)
     	{
@@ -404,6 +404,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			}
 		});
     	
+    	// 预热
+    	AvgResult resultavg = new AvgResult();
+    	doGetAvgValue(resultavg, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
+
     	return result;
     }
 
