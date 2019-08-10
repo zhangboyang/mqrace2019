@@ -1,12 +1,20 @@
 package io.openmessaging;
 
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
+import sun.misc.Unsafe;
+
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import sun.nio.ch.FileChannelImpl;
 
 /**
  * 这是一个简单的基于内存的实现，以方便选手理解题意；
@@ -39,21 +47,50 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		return (rectLeft <= lr && lr <= rectRight && rectBottom <= bt && bt <= rectTop);
 	}
 	
+	public static byte[] hexStringToByteArray(String s) {
+	    int len = s.length();
+	    byte[] data = new byte[len / 2];
+	    for (int i = 0; i < len; i += 2) {
+	        data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
+	                             + Character.digit(s.charAt(i+1), 16));
+	    }
+	    return data;
+	}
+	
     static class MessageCompressor {
     	// compress Message to long
-    	// if ok, return compressed data < 0
-    	// if incompressible, return >= 0
+    	// if compressible,   isValid(ret) == true
+    	// if incompressible, isValid(ret) == false
+    	
+    	static final byte[] bodyTemplate = hexStringToByteArray("0000000000158BE00000000000160BE50D2125260B5E5B2B0C3741265C0C36070000");
+    			
+    	private static byte[] getBody(long t, long a)
+    	{
+    		ByteBuffer buffer = ByteBuffer.allocate(34);
+    		buffer.put(bodyTemplate);
+    		buffer.putLong(0, t);
+    		buffer.putLong(0, a);
+    		return buffer.array();
+    	}
     	public static long doCompress(Message message)
     	{
-    		if (ThreadLocalRandom.current().nextInt(10000) == 0) {
+    		/*if (ThreadLocalRandom.current().nextInt(1000) == 0) {
     			return 0;
     		} else {
     			return makeLong((int)message.getT(), (int)message.getA()) | (1L << 63);
+    		}*/
+    		long t = message.getT();
+    		long a = message.getA();
+    		if (t > 0 && Arrays.equals(getBody(t, a), message.getBody())) {
+    			return makeLong((int)t, (int)a);
+    		} else {
+    			return 0;
     		}
     	}
     	public static boolean isValid(long m)
     	{
-    		return m < 0;
+    		//return m < 0;
+    		return m != 0;
     	}
     	public static int extractT(long c)
     	{
@@ -65,9 +102,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	public static Message doDecompress(long m)
     	{
-    		ByteBuffer buffer = ByteBuffer.allocate(8);
+    		/*ByteBuffer buffer = ByteBuffer.allocate(8);
             buffer.putLong(0, extractT(m));
-    		return new Message(extractT(m), extractA(m), buffer.array());
+    		return new Message(extractT(m), extractA(m), buffer.array());*/
+    		int t = extractT(m);
+    		int a = extractA(m);
+    		return new Message(t, a, getBody(t, a));
     	}
     	public static String dumpMessage(Message message)
     	{
@@ -85,6 +125,45 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     };
     
+    private static final Unsafe unsafe;
+    private static final Method map0;
+    
+    private static final String MAPFILE = "/alidata1/race2019/data/mydata";
+    private static final long MAPLEN = 4 * 1048576 * 4096L;
+    private static final long mapBase;
+    
+    static {
+        Unsafe theUnsafe;
+        try {
+            Field f = Unsafe.class.getDeclaredField("theUnsafe");
+            f.setAccessible(true);
+            theUnsafe = (Unsafe) f.get(null);
+        } catch (Exception e) {
+            theUnsafe = null;
+        }
+        unsafe = theUnsafe;
+        
+        Method theMap0;
+        try {
+        	theMap0 = FileChannelImpl.class.getDeclaredMethod("map0", int.class, long.class, long.class);
+        	theMap0.setAccessible(true);
+        } catch (Exception e) {
+        	theMap0 = null;
+        }
+        map0 = theMap0;
+        
+		long theBase;
+		try {
+			final RandomAccessFile backingFile = new RandomAccessFile(MAPFILE, "rw");
+			backingFile.setLength(MAPLEN);
+			final FileChannel ch = backingFile.getChannel();
+			theBase = (long) map0.invoke(ch, 1, 0L, MAPLEN);
+		} catch (Exception e) {
+			theBase = -1;
+			e.printStackTrace();
+		}
+		mapBase = theBase;
+    }
     
     
     
@@ -110,13 +189,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
 
     private static final AtomicLong nextLeafId = new AtomicLong(0);
-    private static long leafStorage[] = new long[10000000];
+    //private static long leafStorage[] = new long[10000000];
     
     private static volatile int state = 0;
     private static Object stateLock = new Object();
     
-    private static boolean haveUncompressableRecord = false;
-    private static ArrayList<Message> uncompressableRecords = new ArrayList<Message>();
+    private static boolean haveUncompressibleRecord = false;
+    private static ArrayList<Message> uncompressibleRecords = new ArrayList<Message>();
     
     private static void updateLeafIndex(int leafBlockId)
     {
@@ -130,7 +209,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		long l = (long)leafBlockId * L_NREC;
 		long r = l + L_NREC;
 		for (long i = l; i < r; i++) {
-			long m = leafStorage[(int)i];
+			//long m = leafStorage[(int)i];
+			long m = unsafe.getLong(mapBase + i * 8);
 			
 			if (MessageCompressor.isValid(m)) {
 				int t = MessageCompressor.extractT(m);
@@ -164,6 +244,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		synchronized (stateLock) {
     			if (state == 0) {
     				System.out.println("[" + new Date() + "]: put()");
+    				System.out.println(String.format("mapBase=%016X", mapBase));
     				state = 1;
     			}
     		}
@@ -172,21 +253,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	long msgz = MessageCompressor.doCompress(message);
     	
-    	if (msgz == 0) {
-    		haveUncompressableRecord = true;
-    		synchronized (uncompressableRecords) {
-    			uncompressableRecords.add(message);
+    	if (!MessageCompressor.isValid(msgz)) {
+    		haveUncompressibleRecord = true;
+    		synchronized (uncompressibleRecords) {
+    			uncompressibleRecords.add(message);
     		}
     		return;
     	}
     	
     	long id = nextLeafId.getAndIncrement();
-    	leafStorage[(int)id] = msgz;
-    	
-    	if (id < 100) {
-    		//System.out.println(MessageCompressor.dumpMessage(message));
-    	}
-    	
+    	//leafStorage[(int)id] = msgz;
+    	unsafe.putLong(mapBase + id * 8, msgz);
     	
     	int blkid = (int)(id / L_NREC);
     	if (blockCounter.incrementAndGet(blkid) == L_NREC) {
@@ -241,7 +318,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		long l = (cur - HEAP_LEAF_BASE) * L_NREC;
     		long r = l + L_NREC;
     		for (long i = l; i < r; i++) {
-    			long m = leafStorage[(int)i];
+    			//long m = leafStorage[(int)i];
+    			long m = unsafe.getLong(mapBase + i * 8);
     			if (MessageCompressor.isValid(m)) {
     				int t = MessageCompressor.extractT(m);
     				int a = MessageCompressor.extractA(m);
@@ -298,7 +376,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			if (state == 1) {
     				System.out.println("[" + new Date() + "]: createIndex()");
     				createIndex();
-    				System.out.println("uncompressableRecords = " + uncompressableRecords.size());
+    				System.out.println("uncompressableRecords = " + uncompressibleRecords.size());
     				System.out.println("[" + new Date() + "]: getMessage()");
     				state = 2;
     			}
@@ -309,8 +387,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	doGetMessage(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
 
-    	if (haveUncompressableRecord) {
-    		for (Message msg: uncompressableRecords) {
+    	if (haveUncompressibleRecord) {
+    		for (Message msg: uncompressibleRecords) {
     			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
 					result.add(msg);
 				}
@@ -340,7 +418,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		long l = (cur - HEAP_LEAF_BASE) * L_NREC;
     		long r = l + L_NREC;
     		for (long i = l; i < r; i++) {
-    			long m = leafStorage[(int)i];
+    			//long m = leafStorage[(int)i];
+    			long m = unsafe.getLong(mapBase + i * 8);
     			if (MessageCompressor.isValid(m)) {
     				int t = MessageCompressor.extractT(m);
     				int a = MessageCompressor.extractA(m);
@@ -396,8 +475,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	AvgResult result = new AvgResult();
     	doGetAvgValue(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
     	
-    	if (haveUncompressableRecord) {
-    		for (Message msg: uncompressableRecords) {
+    	if (haveUncompressibleRecord) {
+    		for (Message msg: uncompressibleRecords) {
     			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
 					result.sum += msg.getA();
 					result.cnt++;
