@@ -77,7 +77,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		long t = message.getT();
     		long a = message.getA();
     		
-    		long o = t - tBase;
+    		long o = t - tBase + 32;
     		long d = a - tBase + 10000;
     		if (t > 0 && (0 <= o && o < 256) && (0 < d && d < 65536) && Arrays.equals(getBody(t, a), message.getBody())) {
     			return ((int)d & 0xFFFF) | ((int)o << 16);
@@ -91,7 +91,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	public static int extractT(int tBase, int m)
     	{
-    		return tBase + ((m >> 16) & 0xFF);
+    		return tBase + ((m >> 16) & 0xFF) - 32;
     	}
     	public static int extractA(int tBase, int m)
     	{
@@ -218,6 +218,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
+    private static int realRecordId = 0;
     private static long recordId = 0;
     private static int curTBase = 0;
     private static int unfullBlocks = 0;
@@ -230,7 +231,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.out.println(String.format("memBase=%016X", memBase));
 			state = 1;
     	}
-    	
+    	/*if (realRecordId < 100000)
+    	{
+    		System.out.println(realRecordId + ", " + recordId + ", " + MessageCompressor.dumpMessage(message));
+    	} else {
+    		System.exit(-1);
+    	}*/
     	
     	// 如果是一个新块，则更新 tBase
     	if (recordId % L_NREC == 0) {
@@ -264,7 +270,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	// 写入存储区
     	long memOffset = recordId * 3L;
-    	if (recordId % 10000000 == 0) System.out.println(new Date().toString() + ": rid=" + recordId + " unfull=" + unfullBlocks);
+    	if (recordId % 1000000 == 0) {
+    		System.out.println(String.format("%s: realRecordId=%d recordId=%d unfullBlocks=%d", new Date().toString(), realRecordId, recordId, unfullBlocks));
+    	}
     	if (memOffset + 4 > MEMSZ) {
     		System.out.println("ERROR: MEMORY FULL!");
     		System.exit(-1);
@@ -284,6 +292,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		}
     	}
     	recordId++;
+    	realRecordId++;
     }
 
     public void createIndex()

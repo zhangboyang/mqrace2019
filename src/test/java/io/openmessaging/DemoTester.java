@@ -21,7 +21,7 @@ public class DemoTester {
         int checkTime = 10 * 60 * 1000;
 
         //正确性检测的次数
-        int checkTimes = 100;
+        int checkTimes = 30000;
         //发送的线程数量
         int sendTsNum = 10;
         //查询的线程数量
@@ -65,7 +65,7 @@ public class DemoTester {
         AtomicLong msgCheckNum = new AtomicLong(0);
         Thread[] msgChecks = new Thread[checkTsNum];
         for (int i = 0; i < checkTsNum; i++) {
-            msgChecks[i] = new Thread(new MessageChecker(messageStore, maxCheckTime, checkTimes, msgNum, maxMsgCheckSize, msgCheckTimes, msgCheckNum));
+            msgChecks[i] = new Thread(new MessageChecker(messageStore, maxCheckTime, /*checkTimes*/10, msgNum, maxMsgCheckSize, msgCheckTimes, msgCheckNum));
         }
         for (int i = 0; i < checkTsNum; i++) {
             msgChecks[i].start();
@@ -131,22 +131,25 @@ public class DemoTester {
         @Override
         public void run() {
             long count;
-            while ( (count = counter.getAndIncrement()) < maxMsgNum && System.currentTimeMillis() <= maxTimeStamp) {
-                try {
-                    //ByteBuffer buffer = ByteBuffer.allocate(8);
-                    //buffer.putLong(0, count);
-                	
-                    
-                    // 为测试方便, 插入的是有规律的数据, 不是实际测评的情况
-                    messageStore.put(new Message(count, count, getBody(count, count)));
-                    if ((count & 0x1L) == 0) {
-                        //偶数count多加一条消息
-                        messageStore.put(new Message(count, count, getBody(count, count)));
-                    }
-                } catch (Throwable t) {
-                    t.printStackTrace();
-                    System.exit(-1);
-                }
+            while (true) {
+            	synchronized(counter) {
+	            	if (!((count = counter.getAndIncrement()) < maxMsgNum && System.currentTimeMillis() <= maxTimeStamp)) break;
+	                try {
+	                    //ByteBuffer buffer = ByteBuffer.allocate(8);
+	                    //buffer.putLong(0, count);
+	                	
+	                    
+	                    // 为测试方便, 插入的是有规律的数据, 不是实际测评的情况
+	                    messageStore.put(new Message(count, count, getBody(count, count)));
+	                    if ((count & 0x1L) == 0) {
+	                        //偶数count多加一条消息
+	                        messageStore.put(new Message(count, count, getBody(count, count)));
+	                    }
+	                } catch (Throwable t) {
+	                    t.printStackTrace();
+	                    System.exit(-1);
+	                }
+            	}
             }
         }
     }
