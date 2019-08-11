@@ -128,8 +128,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final Unsafe unsafe;
     private static final Method map0;
     
-    //private static final String MAPFILE = "/alidata1/race2019/data/mydata";
-    private static final String MAPFILE = "storage.dat";
+    private static final String MAPFILE = "/alidata1/race2019/data/mydata";
+    //private static final String MAPFILE = "storage.dat";
     private static final long MAPLEN = 4 * 1048576 * 4096L;
     private static final long mapBase;
     
@@ -240,7 +240,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     @Override
-    public void put(Message message) {
+    public synchronized void put(Message message) {
     	
     	if (state == 0) {
     		synchronized (stateLock) {
@@ -271,6 +271,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int blkid = (int)(id / L_NREC);
     	if (blockCounter.incrementAndGet(blkid) == L_NREC) {
     		updateLeafIndex(blkid);
+    	}
+    	
+    	if (id < 1000) {
+    		System.out.println("id=" + id + " msg=" + MessageCompressor.dumpMessage(message));
     	}
     }
 
@@ -422,6 +426,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private AtomicLong totalQueryCost = new AtomicLong();
     private AtomicInteger totalLeafCount = new AtomicInteger();
     private AtomicInteger totalQueryCount = new AtomicInteger();
+    private AtomicLong totalLeafRecord = new AtomicLong();
+    private AtomicLong totalQueryRecord = new AtomicLong();
+    
     
     public void doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
     {
@@ -429,9 +436,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	if (cur >= HEAP_LEAF_BASE) {
     		
     		long stTime = System.nanoTime();
+    		unsafe.getLong(mapBase);
+    		totalLeafCost.addAndGet(System.nanoTime() - stTime);
+    		totalLeafCount.incrementAndGet();
     		
     		long l = (cur - HEAP_LEAF_BASE) * L_NREC;
     		long r = l + L_NREC;
+    		
+    		int leafRecord = 0;
     		for (long i = l; i < r; i++) {
     			//long m = leafStorage[(int)i];
     			long m = unsafe.getLong(mapBase + i * 8);
@@ -442,12 +454,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
     					result.sum += a;
     					result.cnt++;
+    					leafRecord++;
     				}
     			}
     		}
     		
-    		totalLeafCost.addAndGet(System.nanoTime() - stTime);
-    		totalLeafCount.incrementAndGet();
+    		totalLeafRecord.addAndGet(leafRecord);
+    		
     		return;
     	}
     	
@@ -499,6 +512,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				totalQueryCost.set(0);
     				totalLeafCount.set(0);
     				totalQueryCount.set(0);
+    				totalLeafRecord.set(0);
+    				totalQueryRecord.set(0);
     				
     				state = 3;
     			}
@@ -509,6 +524,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	AvgResult result = new AvgResult();
     	doGetAvgValue(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
+    	
+    	totalQueryRecord.addAndGet(result.cnt);
     	
     	if (haveUncompressibleRecord) {
     		for (Message msg: uncompressibleRecords) {
@@ -523,13 +540,15 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	totalQueryCount.incrementAndGet();
     	
     	
-    	if (ThreadLocalRandom.current().nextInt(1000) == 0) { 
+    	if (ThreadLocalRandom.current().nextInt(10) == 0) { 
 	    	double leafCost = totalLeafCost.get() * 1e-6;
 	    	double queryCost = totalQueryCost.get() * 1e-6;
 	    	double leafCount = totalLeafCount.get();
 	    	double queryCount = totalQueryCount.get();
+	    	double leafRecord = totalLeafRecord.get();
+	    	double queryRecord = totalQueryRecord.get();
 	    	
-	    	System.out.println(String.format("[%s] tMin=%08X tMax=%08X aMin=%08X aMax=%08X; leafCost=%.1f queryCost=%.1f costFactor=%.3f; leafCount=%.0f queryCount=%.0f countFactor=%.2f", new Date().toString(), tMin, tMax, aMin, aMax, leafCost, queryCost, (leafCost / queryCost), leafCount, queryCount, leafCount / queryCount));
+	    	System.out.println(String.format("[%s] tMin=%08X tMax=%08X aMin=%08X aMax=%08X; diffT=%08X diffA=%08X; leafCost=%.1f queryCost=%.1f costFactor=%.4f; leafCount=%.0f queryCount=%.0f countFactor=%.2f; leafRecord=%.0f queryRecord=%.0f recordFactor=%.4f", new Date().toString(), tMin, tMax, aMin, aMax, tMax - tMin, aMax - aMin, leafCost, queryCost, (leafCost / queryCost), leafCount, queryCount, (leafCount / queryCount), leafRecord, queryRecord, (leafRecord / queryRecord)));
     	}
     	
     	return result.cnt == 0 ? 0 : result.sum / result.cnt;
