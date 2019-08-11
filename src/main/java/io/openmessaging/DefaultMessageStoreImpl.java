@@ -72,41 +72,38 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		buffer.putLong(8, a);
     		return buffer.array();
     	}
-    	public static long doCompress(Message message)
+    	public static int doCompress(int tBase, Message message)
     	{
-    		/*if (ThreadLocalRandom.current().nextInt(1000) == 0) {
-    			return 0;
-    		} else {
-    			return makeLong((int)message.getT(), (int)message.getA()) | (1L << 63);
-    		}*/
     		long t = message.getT();
     		long a = message.getA();
-    		if (t > 0 && Arrays.equals(getBody(t, a), message.getBody())) {
-    			return makeLong((int)t, (int)a);
+    		
+    		long o = t - tBase;
+    		long d = a - tBase + 10000;
+    		if (t > 0 && (0 <= o && o < 256) && (0 < d && d < 65536) && Arrays.equals(getBody(t, a), message.getBody())) {
+    			return ((int)d & 0xFFFF) | ((int)o << 16);
     		} else {
     			return 0;
     		}
     	}
-    	public static boolean isValid(long m)
+    	public static boolean isValid(int m)
     	{
-    		//return m < 0;
-    		return m != 0;
+    		return (m & 0xFFFFFF) != 0;
     	}
-    	public static int extractT(long c)
+    	public static int extractT(int tBase, int m)
     	{
-    		return (int)(c >> 32);
+    		return tBase + ((m >> 16) & 0xFF);
     	}
-    	public static int extractA(long c)
+    	public static int extractA(int tBase, int m)
     	{
-    		return (int)(c & 0xFFFFFFFF);
+    		return tBase + (m & 0xFFFF) - 10000;
     	}
-    	public static Message doDecompress(long m)
+    	public static Message doDecompress(int tBase, int m)
     	{
     		/*ByteBuffer buffer = ByteBuffer.allocate(8);
             buffer.putLong(0, extractT(m));
     		return new Message(extractT(m), extractA(m), buffer.array());*/
-    		int t = extractT(m);
-    		int a = extractA(m);
+    		int t = extractT(tBase, m);
+    		int a = extractA(tBase, m);
     		return new Message(a, t, getBody(t, a));
     	}
     	public static String dumpMessage(Message message)
@@ -126,12 +123,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     };
     
     private static final Unsafe unsafe;
-    private static final Method map0;
     
-    private static final String MAPFILE = "/alidata1/race2019/data/mydata";
-    //private static final String MAPFILE = "storage.dat";
-    private static final long MAPLEN = 4 * 1048576 * 4096L;
-    private static final long mapBase;
+    private static final long MEMSZ = 6 * 1024 * 1048576L;
+    private static final long memBase;
     
     static {
         Unsafe theUnsafe;
@@ -144,27 +138,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
         }
         unsafe = theUnsafe;
         
-        Method theMap0;
-        try {
-        	theMap0 = FileChannelImpl.class.getDeclaredMethod("map0", int.class, long.class, long.class);
-        	theMap0.setAccessible(true);
-        } catch (Exception e) {
-        	theMap0 = null;
-        }
-        map0 = theMap0;
-        
-		long theBase;
-		try {
-			final RandomAccessFile backingFile = new RandomAccessFile(MAPFILE, "rw");
-			backingFile.setLength(MAPLEN);
-			final FileChannel ch = backingFile.getChannel();
-			theBase = (long) map0.invoke(ch, 1, 0L, MAPLEN);
-		} catch (Exception e) {
-			e.printStackTrace();
-			theBase = 0;
-			System.exit(-1);
-		}
-		mapBase = theBase;
+        memBase = unsafe.allocateMemory(MEMSZ);
+        unsafe.setMemory(memBase, MEMSZ, (byte)0);
     }
     
     
@@ -178,29 +153,32 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int I_SUML = 4;
     private static final int I_SUMH = 5;
     private static final int I_CNT  = 6;
+    private static final int I_TBASE = 7;
     
-    private static final int H = 22; // max height of HEAP
+    private static final int H = 23; // max height of HEAP
     private static final int HEAP_ARRAY_SIZE = ((1 << (H + 1)) + 1);
     private static int indexHeap[] = new int[HEAP_ARRAY_SIZE * I_SIZE];
     private static final int HEAP_LEAF_BASE = 1 << H;
     
-    private static AtomicIntegerArray blockCounter = new AtomicIntegerArray(1 << H);
     
-    private static final int L_PGSZ = 4096; // leaf-record block size
-    private static final int L_NREC = L_PGSZ / 8; // n-record in one block
     
+    private static final int L_NREC = 256; // n-record in one block
 
-    private static final AtomicLong nextLeafId = new AtomicLong(0);
-    //private static long leafStorage[] = new long[10000000];
-    
     private static volatile int state = 0;
     private static Object stateLock = new Object();
     
     private static boolean haveUncompressibleRecord = false;
     private static ArrayList<Message> uncompressibleRecords = new ArrayList<Message>();
     
+    private static void updateLeafTBase(int leafBlockId, int tBase)
+    {
+    	indexHeap[(HEAP_LEAF_BASE + leafBlockId) * I_SIZE + I_TBASE] = tBase;
+    }
     private static void updateLeafIndex(int leafBlockId)
     {
+    	int base = (HEAP_LEAF_BASE + leafBlockId) * I_SIZE;
+    	int tBase = indexHeap[base + I_TBASE];
+    	
     	int minT = Integer.MAX_VALUE;
 		int maxT = Integer.MIN_VALUE;
 		int minA = Integer.MAX_VALUE;
@@ -211,12 +189,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		long l = (long)leafBlockId * L_NREC;
 		long r = l + L_NREC;
 		for (long i = l; i < r; i++) {
-			//long m = leafStorage[(int)i];
-			long m = unsafe.getLong(mapBase + i * 8);
+			
+			int m = unsafe.getInt(memBase + i * 3);
 			
 			if (MessageCompressor.isValid(m)) {
-				int t = MessageCompressor.extractT(m);
-				int a = MessageCompressor.extractA(m);
+				int t = MessageCompressor.extractT(tBase, m);
+				int a = MessageCompressor.extractA(tBase, m);
 				
 				minT = Math.min(minT, t);
 				maxT = Math.max(maxT, t);
@@ -228,7 +206,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			}
 		}
 		
-		int base = (HEAP_LEAF_BASE + leafBlockId) * I_SIZE;
+		
 		indexHeap[base + I_MINT] = minT; 
 		indexHeap[base + I_MAXT] = maxT;
 		indexHeap[base + I_MINA] = minA;
@@ -236,53 +214,81 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		indexHeap[base + I_SUML] = (int)(sumA & 0xFFFFFFFF);
 		indexHeap[base + I_SUMH] = (int)(sumA >> 32);
 		indexHeap[base + I_CNT ] = cnt;
-		
     }
+    
+    
+    
+    private static long recordId = 0;
+    private static int curTBase = 0;
+    private static int unfullBlocks = 0;
     
     @Override
     public synchronized void put(Message message) {
     	
     	if (state == 0) {
-    		synchronized (stateLock) {
-    			if (state == 0) {
-    				System.out.println("[" + new Date() + "]: put()");
-    				System.out.println(String.format("mapBase=%016X", mapBase));
-    				state = 1;
-    			}
-    		}
+			System.out.println("[" + new Date() + "]: put()");
+			System.out.println(String.format("memBase=%016X", memBase));
+			state = 1;
     	}
     	
     	
-    	long msgz = MessageCompressor.doCompress(message);
+    	// 如果是一个新块，则更新 tBase
+    	if (recordId % L_NREC == 0) {
+    		curTBase = (int) message.getT();
+    	}
+    	
+    	// 尝试压缩消息
+    	int msgz = MessageCompressor.doCompress(curTBase, message);
     	
     	if (!MessageCompressor.isValid(msgz)) {
-    		System.out.println(MessageCompressor.dumpMessage(message));
-    		haveUncompressibleRecord = true;
-    		synchronized (uncompressibleRecords) {
-    			uncompressibleRecords.add(message);
+    		
+    		// 若压缩失败，可能是因为 偏移太大
+    		// 尝试用它自己的 tBase 去压缩
+    		msgz = MessageCompressor.doCompress((int)message.getT(), message);
+    		
+    		if (!MessageCompressor.isValid(msgz)) {
+    			// 若还是不能压缩，说明消息不能压缩，转slow path处理
+	    		System.out.println(MessageCompressor.dumpMessage(message));
+	    		haveUncompressibleRecord = true;
+	    		synchronized (uncompressibleRecords) {
+	    			uncompressibleRecords.add(message);
+	    		}
+	    		return;
     		}
-    		return;
+    		
+    		// 用新偏移压缩成功，新开一个块
+    		recordId = (recordId / L_NREC + 1) * L_NREC;
+    		curTBase = (int) message.getT();
+    		unfullBlocks++;
     	}
     	
-    	long id = nextLeafId.getAndIncrement();
-    	//leafStorage[(int)id] = msgz;
-    	unsafe.putLong(mapBase + id * 8, msgz);
-    	
-    	int blkid = (int)(id / L_NREC);
-    	if (blockCounter.incrementAndGet(blkid) == L_NREC) {
-    		updateLeafIndex(blkid);
+    	// 写入存储区
+    	long memOffset = recordId * 3L;
+    	if (recordId % 10000000 == 0) System.out.println(new Date().toString() + ": rid=" + recordId + " unfull=" + unfullBlocks);
+    	if (memOffset + 4 > MEMSZ) {
+    		System.out.println("ERROR: MEMORY FULL!");
+    		System.exit(-1);
     	}
+    	unsafe.putInt(memBase + memOffset, msgz);
     	
-    	if (id < 1000) {
-    		System.out.println("id=" + id + " msg=" + MessageCompressor.dumpMessage(message));
+    	// 若是新的块
+    	if (recordId % L_NREC == 0) {
+    		int blockId = (int)(recordId / L_NREC);
+    		
+    		// 登记新块的tBase
+    		updateLeafTBase(blockId, curTBase);
+    		
+    		// 对上一个块计算metadata
+    		if (blockId > 0) {
+    			updateLeafIndex(blockId - 1);
+    		}
     	}
+    	recordId++;
     }
 
     public void createIndex()
     {
-    	blockCounter = null;
-    	
-    	long nLeaf = nextLeafId.get();
+    	long nLeaf = recordId;
     	int nBlock = (int)(nLeaf / L_NREC);
     	if (nLeaf % L_NREC != 0) {
     		updateLeafIndex(nBlock);
@@ -321,18 +327,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
+    		int tBase = indexHeap[cur * I_SIZE + I_TBASE];
     		
     		long l = (cur - HEAP_LEAF_BASE) * L_NREC;
     		long r = l + L_NREC;
     		for (long i = l; i < r; i++) {
-    			//long m = leafStorage[(int)i];
-    			long m = unsafe.getLong(mapBase + i * 8);
+    			
+    			int m = unsafe.getInt(memBase + i * 3);
     			if (MessageCompressor.isValid(m)) {
-    				int t = MessageCompressor.extractT(m);
-    				int a = MessageCompressor.extractA(m);
+    				int t = MessageCompressor.extractT(tBase, m);
+    				int a = MessageCompressor.extractA(tBase, m);
     				
     				if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
-    					result.add(MessageCompressor.doDecompress(m));
+    					result.add(MessageCompressor.doDecompress(tBase, m));
     				}
     			}
     		}
@@ -378,17 +385,21 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     @Override
     public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
+
     	if (state == 1) {
     		synchronized (stateLock) {
-    			if (state == 1) {
-    				System.out.println("[" + new Date() + "]: createIndex()");
-    				createIndex();
-    				System.out.println("uncompressableRecords = " + uncompressibleRecords.size());
-    				System.out.println("[" + new Date() + "]: getMessage()");
-    				state = 2;
-    			}
+				if (state == 1) {
+					System.out.println("[" + new Date() + "]: createIndex()");
+					createIndex();
+					System.out.println("unfullBlocks=" + unfullBlocks);
+					System.out.println("uncompressableRecords = " + uncompressibleRecords.size());
+					System.out.println("[" + new Date() + "]: getMessage()");
+					state = 2;
+				}
     		}
     	}
+    	
+    	System.gc();
     	
     	ArrayList<Message> result = new ArrayList<Message>();
     	
@@ -435,23 +446,23 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	if (cur >= HEAP_LEAF_BASE) {
     		
-
+    		int tBase = indexHeap[cur * I_SIZE + I_TBASE];
     		
     		long l = (cur - HEAP_LEAF_BASE) * L_NREC;
     		long r = l + L_NREC;
     		
     		long stTime = System.nanoTime();
-    		tttt = unsafe.getLong(mapBase + l * 8);
+    		tttt = unsafe.getInt(memBase + l * 3);
     		totalLeafCost.addAndGet(System.nanoTime() - stTime);
     		totalLeafCount.incrementAndGet();
     		
     		int leafRecord = 0;
     		for (long i = l; i < r; i++) {
-    			//long m = leafStorage[(int)i];
-    			long m = unsafe.getLong(mapBase + i * 8);
+    			
+    			int m = unsafe.getInt(memBase + i * 3);
     			if (MessageCompressor.isValid(m)) {
-    				int t = MessageCompressor.extractT(m);
-    				int a = MessageCompressor.extractA(m);
+    				int t = MessageCompressor.extractT(tBase, m);
+    				int a = MessageCompressor.extractA(tBase, m);
     				
     				if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
     					result.sum += a;
@@ -542,7 +553,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	totalQueryCount.incrementAndGet();
     	
     	
-    	if (ThreadLocalRandom.current().nextInt(10) == 0) { 
+    	if (ThreadLocalRandom.current().nextInt(1000) == 0) { 
 	    	double leafCost = totalLeafCost.get() * 1e-6;
 	    	double queryCost = totalQueryCost.get() * 1e-6;
 	    	double leafCount = totalLeafCount.get();
