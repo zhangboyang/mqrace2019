@@ -428,20 +428,22 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private AtomicInteger totalQueryCount = new AtomicInteger();
     private AtomicLong totalLeafRecord = new AtomicLong();
     private AtomicLong totalQueryRecord = new AtomicLong();
-    
+    private static volatile long tttt;
     
     public void doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
     		
-    		long stTime = System.nanoTime();
-    		unsafe.getLong(mapBase);
-    		totalLeafCost.addAndGet(System.nanoTime() - stTime);
-    		totalLeafCount.incrementAndGet();
+
     		
     		long l = (cur - HEAP_LEAF_BASE) * L_NREC;
     		long r = l + L_NREC;
+    		
+    		long stTime = System.nanoTime();
+    		tttt = unsafe.getLong(mapBase + l * 8);
+    		totalLeafCost.addAndGet(System.nanoTime() - stTime);
+    		totalLeafCount.incrementAndGet();
     		
     		int leafRecord = 0;
     		for (long i = l; i < r; i++) {
