@@ -128,8 +128,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final Unsafe unsafe;
     private static final Method map0;
     
-    private static final String MAPFILE = "/alidata1/race2019/data/mydata";
-    //private static final String MAPFILE = "storage.dat";
+    //private static final String MAPFILE = "/alidata1/race2019/data/mydata";
+    private static final String MAPFILE = "storage.dat";
     private static final long MAPLEN = 4 * 1048576 * 4096L;
     private static final long mapBase;
     
@@ -179,14 +179,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int I_SUMH = 5;
     private static final int I_CNT  = 6;
     
-    private static final int H = 25; // max height of HEAP
+    private static final int H = 22; // max height of HEAP
     private static final int HEAP_ARRAY_SIZE = ((1 << (H + 1)) + 1);
     private static int indexHeap[] = new int[HEAP_ARRAY_SIZE * I_SIZE];
     private static final int HEAP_LEAF_BASE = 1 << H;
     
     private static AtomicIntegerArray blockCounter = new AtomicIntegerArray(1 << H);
     
-    private static final int L_PGSZ = 4096 / 8; // leaf-record block size
+    private static final int L_PGSZ = 4096; // leaf-record block size
     private static final int L_NREC = L_PGSZ / 8; // n-record in one block
     
 
@@ -417,10 +417,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	long sum;
     	int cnt;
     }
+    
+    private AtomicLong totalLeafCost = new AtomicLong();
+    private AtomicLong totalQueryCost = new AtomicLong();
+    private AtomicInteger totalLeafCount = new AtomicInteger();
+    private AtomicInteger totalQueryCount = new AtomicInteger();
+    
     public void doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
+    		
+    		long stTime = System.nanoTime();
     		
     		long l = (cur - HEAP_LEAF_BASE) * L_NREC;
     		long r = l + L_NREC;
@@ -438,6 +446,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			}
     		}
     		
+    		totalLeafCost.addAndGet(System.nanoTime() - stTime);
+    		totalLeafCount.incrementAndGet();
     		return;
     	}
     	
@@ -479,6 +489,24 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
+    	
+    	if (state == 2) {
+    		synchronized (stateLock) {
+    			if (state == 2) {
+    				System.out.println("[" + new Date() + "]: getAvgValue()");
+    				
+    				totalLeafCost.set(0);
+    				totalQueryCost.set(0);
+    				totalLeafCount.set(0);
+    				totalQueryCount.set(0);
+    				
+    				state = 3;
+    			}
+    		}
+    	}
+    	
+    	long stTime = System.nanoTime();
+    	
     	AvgResult result = new AvgResult();
     	doGetAvgValue(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
     	
@@ -489,6 +517,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
 					result.cnt++;
 				}
     		}
+    	}
+    	
+    	totalQueryCost.addAndGet(System.nanoTime() - stTime);
+    	totalQueryCount.incrementAndGet();
+    	
+    	
+    	if (ThreadLocalRandom.current().nextInt(1000) == 0) { 
+	    	double leafCost = totalLeafCost.get() * 1e-6;
+	    	double queryCost = totalQueryCost.get() * 1e-6;
+	    	double leafCount = totalLeafCount.get();
+	    	double queryCount = totalQueryCount.get();
+	    	
+	    	System.out.println(String.format("[%s] tMin=%08X tMax=%08X aMin=%08X aMax=%08X; leafCost=%.1f queryCost=%.1f costFactor=%.3f; leafCount=%.0f queryCount=%.0f countFactor=%.2f", new Date().toString(), tMin, tMax, aMin, aMax, leafCost, queryCost, (leafCost / queryCost), leafCount, queryCount, leafCount / queryCount));
     	}
     	
     	return result.cnt == 0 ? 0 : result.sum / result.cnt;
