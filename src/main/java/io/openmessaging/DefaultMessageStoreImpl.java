@@ -79,7 +79,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		long t = message.getT();
     		long a = message.getA();
     		
-    		long o = t - tBase + 32;
+    		long o = t - tBase;
     		long d = a - tBase + 10000;
     		if (t > 0 && (0 <= o && o < 256) && (0 < d && d < 65536) && Arrays.equals(getBody(t, a), message.getBody())) {
     			return ((int)d & 0xFFFF) | ((int)o << 16);
@@ -93,7 +93,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	public static int extractT(int tBase, int m)
     	{
-    		return tBase + ((m >> 16) & 0xFF) - 32;
+    		return tBase + ((m >> 16) & 0xFF);
     	}
     	public static int extractA(int tBase, int m)
     	{
@@ -126,7 +126,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final Unsafe unsafe;
     
-    private static final long MEMSZ = 6 * 1024 * 1048576L;
+    private static final long MEMSZ = 3 * 1024 * 1048576L;
     private static final long memBase;
     
     static {
@@ -157,14 +157,31 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int I_CNT  = 6;
     private static final int I_TBASE = 7;
     
-    private static final int H = 23; // max height of HEAP
+    private static final int H = 24; // max height of HEAP
     private static final int HEAP_ARRAY_SIZE = ((1 << (H + 1)) + 1);
-    private static int indexHeap[] = new int[HEAP_ARRAY_SIZE * I_SIZE];
     private static final int HEAP_LEAF_BASE = 1 << H;
+    private static final long heapBase;
     
+    static {
+    	int arraySize = HEAP_ARRAY_SIZE * I_SIZE;
+        heapBase = unsafe.allocateMemory(arraySize * 4);
+        unsafe.setMemory(heapBase, arraySize * 4, (byte)0);
+    }
     
+    private static int indexHeap(int offset)
+    {
+    	return unsafe.getInt(heapBase + offset * 4L);
+    }
+    private static long indexHeapL(int offset)
+    {
+    	return unsafe.getLong(heapBase + offset * 4L);
+    }
+    private static void indexHeapSet(int offset, int val)
+    {
+    	unsafe.putInt(heapBase + offset * 4L, val);
+    }
     
-    private static final int L_NREC = 256; // n-record in one block
+    private static final int L_NREC = 128; // n-record in one block
 
     private static volatile int state = 0;
     private static Object stateLock = new Object();
@@ -174,12 +191,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static void updateLeafTBase(int leafBlockId, int tBase)
     {
-    	indexHeap[(HEAP_LEAF_BASE + leafBlockId) * I_SIZE + I_TBASE] = tBase;
+    	indexHeapSet((HEAP_LEAF_BASE + leafBlockId) * I_SIZE + I_TBASE, tBase);
     }
     private static void updateLeafIndex(int leafBlockId)
     {
     	int base = (HEAP_LEAF_BASE + leafBlockId) * I_SIZE;
-    	int tBase = indexHeap[base + I_TBASE];
+    	int tBase = indexHeap(base + I_TBASE);
     	
     	int minT = Integer.MAX_VALUE;
 		int maxT = Integer.MIN_VALUE;
@@ -209,13 +226,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		}
 		
 		
-		indexHeap[base + I_MINT] = minT; 
-		indexHeap[base + I_MAXT] = maxT;
-		indexHeap[base + I_MINA] = minA;
-		indexHeap[base + I_MAXA] = maxA;
-		indexHeap[base + I_SUML] = (int)(sumA & 0xFFFFFFFF);
-		indexHeap[base + I_SUMH] = (int)(sumA >> 32);
-		indexHeap[base + I_CNT ] = cnt;
+		indexHeapSet(base + I_MINT, minT); 
+		indexHeapSet(base + I_MAXT, maxT);
+		indexHeapSet(base + I_MINA, minA);
+		indexHeapSet(base + I_MAXA, maxA);
+		indexHeapSet(base + I_SUML, (int)(sumA & 0xFFFFFFFF));
+		indexHeapSet(base + I_SUMH, (int)(sumA >> 32));
+		indexHeapSet(base + I_CNT , cnt);
     }
     
     
@@ -322,6 +339,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			doPutMessage(sortBuffer.get(i));
     		}
     		sortBuffer.subList(0, SORTBUFFER_LOW).clear();
+    		
+    		System.gc();
     	}
     }
 
@@ -350,19 +369,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			int lch_base = I_SIZE * (cur * 2);
     			int rch_base = I_SIZE * (cur * 2 + 1);
     			
-    			indexHeap[cur_base + I_MINT] = Math.min(indexHeap[lch_base + I_MINT], indexHeap[rch_base + I_MINT]); 
-    			indexHeap[cur_base + I_MAXT] = Math.max(indexHeap[lch_base + I_MAXT], indexHeap[rch_base + I_MAXT]);
-    			indexHeap[cur_base + I_MINA] = Math.min(indexHeap[lch_base + I_MINA], indexHeap[rch_base + I_MINA]);
-    			indexHeap[cur_base + I_MAXA] = Math.max(indexHeap[lch_base + I_MAXA], indexHeap[rch_base + I_MAXA]);
+    			indexHeapSet(cur_base + I_MINT, Math.min(indexHeap(lch_base + I_MINT), indexHeap(rch_base + I_MINT))); 
+    			indexHeapSet(cur_base + I_MAXT, Math.max(indexHeap(lch_base + I_MAXT), indexHeap(rch_base + I_MAXT)));
+    			indexHeapSet(cur_base + I_MINA, Math.min(indexHeap(lch_base + I_MINA), indexHeap(rch_base + I_MINA)));
+    			indexHeapSet(cur_base + I_MAXA, Math.max(indexHeap(lch_base + I_MAXA), indexHeap(rch_base + I_MAXA)));
     			
-    			long lch_sum = makeLong(indexHeap[lch_base + I_SUMH], indexHeap[lch_base + I_SUML]);
-    			long rch_sum = makeLong(indexHeap[rch_base + I_SUMH], indexHeap[rch_base + I_SUML]);
+    			long lch_sum = makeLong(indexHeap(lch_base + I_SUMH), indexHeap(lch_base + I_SUML));
+    			long rch_sum = makeLong(indexHeap(rch_base + I_SUMH), indexHeap(rch_base + I_SUML));
     			long cur_sum = lch_sum + rch_sum;
     			
-    			indexHeap[cur_base + I_SUML] = (int)(cur_sum & 0xFFFFFFFF);
-    			indexHeap[cur_base + I_SUMH] = (int)(cur_sum >> 32);
+    			indexHeapSet(cur_base + I_SUML, (int)(cur_sum & 0xFFFFFFFF));
+    			indexHeapSet(cur_base + I_SUMH, (int)(cur_sum >> 32));
     			
-    			indexHeap[cur_base + I_CNT ] = indexHeap[lch_base + I_CNT ] + indexHeap[rch_base + I_CNT ];
+    			indexHeapSet(cur_base + I_CNT , indexHeap(lch_base + I_CNT ) + indexHeap(rch_base + I_CNT ));
     		}
     	}
     	
@@ -379,7 +398,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
-    		int tBase = indexHeap[cur * I_SIZE + I_TBASE];
+    		int tBase = indexHeap(cur * I_SIZE + I_TBASE);
     		
     		long l = (cur - HEAP_LEAF_BASE) * L_NREC;
     		long r = l + L_NREC;
@@ -403,32 +422,32 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		int lch_base = I_SIZE * lch;
 		int rch_base = I_SIZE * rch;
 		/*System.out.println(String.format("%d lch %d,%d,%d,%d,%d,%d", cur,
-				indexHeap[lch_base + I_MINT],
-				indexHeap[lch_base + I_MAXT],
-				indexHeap[lch_base + I_MINA],
-				indexHeap[lch_base + I_MAXA],
-				makeLong(indexHeap[lch_base + I_SUMH], indexHeap[lch_base + I_SUML]),
-				indexHeap[lch_base + I_CNT ]
+				indexHeap(lch_base + I_MINT),
+				indexHeap(lch_base + I_MAXT),
+				indexHeap(lch_base + I_MINA),
+				indexHeap(lch_base + I_MAXA),
+				makeLong(indexHeap(lch_base + I_SUMH), indexHeap(lch_base + I_SUML)),
+				indexHeap(lch_base + I_CNT )
 		));
 		System.out.println(String.format("%d rch %d,%d,%d,%d,%d,%d", cur,
-				indexHeap[rch_base + I_MINT],
-				indexHeap[rch_base + I_MAXT],
-				indexHeap[rch_base + I_MINA],
-				indexHeap[rch_base + I_MAXA],
-				makeLong(indexHeap[rch_base + I_SUMH], indexHeap[rch_base + I_SUML]),
-				indexHeap[rch_base + I_CNT ]
+				indexHeap(rch_base + I_MINT),
+				indexHeap(rch_base + I_MAXT),
+				indexHeap(rch_base + I_MINA),
+				indexHeap(rch_base + I_MAXA),
+				makeLong(indexHeap(rch_base + I_SUMH), indexHeap(rch_base + I_SUML)),
+				indexHeap(rch_base + I_CNT )
 		));*/
 		
 		if (rectOverlap(
-				indexHeap[lch_base + I_MINT], indexHeap[lch_base + I_MAXT],
-				indexHeap[lch_base + I_MINA], indexHeap[lch_base + I_MAXA],
+				indexHeap(lch_base + I_MINT), indexHeap(lch_base + I_MAXT),
+				indexHeap(lch_base + I_MINA), indexHeap(lch_base + I_MAXA),
 				tMin, tMax,
 				aMin, aMax)) {
 			doGetMessage(result, lch, aMin, aMax, tMin, tMax);
 		}
 		if (rectOverlap(
-				indexHeap[rch_base + I_MINT], indexHeap[rch_base + I_MAXT],
-				indexHeap[rch_base + I_MINA], indexHeap[rch_base + I_MAXA],
+				indexHeap(rch_base + I_MINT), indexHeap(rch_base + I_MAXT),
+				indexHeap(rch_base + I_MINA), indexHeap(rch_base + I_MAXA),
 				tMin, tMax,
 				aMin, aMax)) {
 			doGetMessage(result, rch, aMin, aMax, tMin, tMax);
@@ -487,22 +506,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private AtomicInteger totalQueryCount = new AtomicInteger();
     private AtomicLong totalLeafRecord = new AtomicLong();
     private AtomicLong totalQueryRecord = new AtomicLong();
-    private static volatile long tttt;
     
     public void doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
     		
-    		int tBase = indexHeap[cur * I_SIZE + I_TBASE];
+    		int tBase = indexHeap(cur * I_SIZE + I_TBASE);
     		
     		long l = (cur - HEAP_LEAF_BASE) * L_NREC;
     		long r = l + L_NREC;
     		
     		long stTime = System.nanoTime();
-    		tttt = unsafe.getInt(memBase + l * 3);
-    		totalLeafCost.addAndGet(System.nanoTime() - stTime);
-    		totalLeafCount.incrementAndGet();
+    		
     		
     		int leafRecord = 0;
     		for (long i = l; i < r; i++) {
@@ -520,6 +536,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			}
     		}
     		
+    		totalLeafCost.addAndGet(System.nanoTime() - stTime);
+    		totalLeafCount.incrementAndGet();
     		totalLeafRecord.addAndGet(leafRecord);
     		
     		return;
@@ -531,30 +549,30 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		int rch_base = I_SIZE * rch;
 		
 		if (rectInRect(
-				indexHeap[lch_base + I_MINT], indexHeap[lch_base + I_MAXT],
-				indexHeap[lch_base + I_MINA], indexHeap[lch_base + I_MAXA],
+				indexHeap(lch_base + I_MINT), indexHeap(lch_base + I_MAXT),
+				indexHeap(lch_base + I_MINA), indexHeap(lch_base + I_MAXA),
 				tMin, tMax,
 				aMin, aMax)) {
-			result.sum += makeLong(indexHeap[lch_base + I_SUMH], indexHeap[lch_base + I_SUML]);
-			result.cnt += indexHeap[lch_base + I_CNT ];
+			result.sum += indexHeapL(lch_base + I_SUML);
+			result.cnt += indexHeap(lch_base + I_CNT );
 		} else if (rectOverlap(
-					indexHeap[lch_base + I_MINT], indexHeap[lch_base + I_MAXT],
-					indexHeap[lch_base + I_MINA], indexHeap[lch_base + I_MAXA],
+					indexHeap(lch_base + I_MINT), indexHeap(lch_base + I_MAXT),
+					indexHeap(lch_base + I_MINA), indexHeap(lch_base + I_MAXA),
 					tMin, tMax,
 					aMin, aMax)) {
 			doGetAvgValue(result, lch, aMin, aMax, tMin, tMax);
 		}
 		
 		if (rectInRect(
-				indexHeap[rch_base + I_MINT], indexHeap[rch_base + I_MAXT],
-				indexHeap[rch_base + I_MINA], indexHeap[rch_base + I_MAXA],
+				indexHeap(rch_base + I_MINT), indexHeap(rch_base + I_MAXT),
+				indexHeap(rch_base + I_MINA), indexHeap(rch_base + I_MAXA),
 				tMin, tMax,
 				aMin, aMax)) {
-			result.sum += makeLong(indexHeap[rch_base + I_SUMH], indexHeap[rch_base + I_SUML]);
-			result.cnt += indexHeap[rch_base + I_CNT ];
+			result.sum += indexHeapL(rch_base + I_SUML);
+			result.cnt += indexHeap(rch_base + I_CNT );
 		} else if (rectOverlap(
-					indexHeap[rch_base + I_MINT], indexHeap[rch_base + I_MAXT],
-					indexHeap[rch_base + I_MINA], indexHeap[rch_base + I_MAXA],
+					indexHeap(rch_base + I_MINT), indexHeap(rch_base + I_MAXT),
+					indexHeap(rch_base + I_MINA), indexHeap(rch_base + I_MAXA),
 					tMin, tMax,
 					aMin, aMax)) {
 			doGetAvgValue(result, rch, aMin, aMax, tMin, tMax);
