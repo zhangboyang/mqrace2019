@@ -2,6 +2,8 @@ package io.openmessaging;
 
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -330,6 +332,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		doPutMessage(m);
     	}
     	sortBuffer.clear();
+    	sortBuffer = null;
     	
     	// flush last block
     	long nLeaf = recordId;
@@ -365,6 +368,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	System.out.println("nLeaf : " + nLeaf);
     	System.out.println("nBlock: " + nBlock);
+    	
+    	try {
+    		System.out.print(new String(Files.readAllBytes(Paths.get("/proc/meminfo"))));
+    	} catch (Exception e) {
+    	}
     }
     
     public void doGetMessage(ArrayList<Message> result, int cur, int aMin, int aMax, int tMin, int tMax)
@@ -428,7 +436,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     @Override
-    public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
+    public synchronized List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
 
     	if (state == 1) {
     		synchronized (stateLock) {
