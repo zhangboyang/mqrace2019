@@ -157,15 +157,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int I_CNT  = 6;
     private static final int I_TBASE = 7;
     
-    private static final int H = 24; // max height of HEAP
+    private static final int H = 23; // max height of HEAP
     private static final int HEAP_ARRAY_SIZE = ((1 << (H + 1)) + 1);
     private static final int HEAP_LEAF_BASE = 1 << H;
+    private static final int heapIntArraySize = HEAP_ARRAY_SIZE * I_SIZE;
     private static final long heapBase;
     
+    private static final int L_NREC = 256; // n-record in one block
+    
     static {
-    	int arraySize = HEAP_ARRAY_SIZE * I_SIZE;
-        heapBase = unsafe.allocateMemory(arraySize * 4);
-        unsafe.setMemory(heapBase, arraySize * 4, (byte)0);
+        heapBase = unsafe.allocateMemory(heapIntArraySize * 4);
+        unsafe.setMemory(heapBase, heapIntArraySize * 4, (byte)0);
     }
     
     private static int indexHeap(int offset)
@@ -178,10 +180,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     private static void indexHeapSet(int offset, int val)
     {
+    	if (offset < 0 || offset >= heapIntArraySize) {
+    		System.out.println("INDEX ARRAY FULL!");
+    		System.exit(-1);
+    	}
     	unsafe.putInt(heapBase + offset * 4L, val);
     }
     
-    private static final int L_NREC = 128; // n-record in one block
+    
 
     private static volatile int state = 0;
     private static Object stateLock = new Object();
