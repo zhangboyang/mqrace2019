@@ -223,14 +223,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static int curTBase = 0;
     private static int unfullBlocks = 0;
     
-    @Override
-    public synchronized void put(Message message) {
-    	
-    	if (state == 0) {
-			System.out.println("[" + new Date() + "]: put()");
-			System.out.println(String.format("memBase=%016X", memBase));
-			state = 1;
-    	}
+    
+    private void doPutMessage(Message message)
+    {
+
     	/*if (realRecordId < 100000)
     	{
     		System.out.println(realRecordId + ", " + recordId + ", " + MessageCompressor.dumpMessage(message));
@@ -294,9 +290,48 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	recordId++;
     	realRecordId++;
     }
+    
+    
+    private static void doSort(ArrayList<Message> a)
+    {
+    	Collections.sort(a, new Comparator<Message>() {
+			public int compare(Message a, Message b) {
+				return Long.compare(a.getT(), b.getT());
+			}
+		});
+    }
+    
+    private static final int SORTBUFFER_LOW  = 100000;
+    private static final int SORTBUFFER_HIGH = 200000;
+    private static ArrayList<Message> sortBuffer = new ArrayList<Message>();
+    
+    @Override
+    public synchronized void put(Message message) {
+    	if (state == 0) {
+			System.out.println("[" + new Date() + "]: put()");
+			System.out.println(String.format("memBase=%016X", memBase));
+			state = 1;
+    	}
+    	
+    	sortBuffer.add(message);
+    	if (sortBuffer.size() >= SORTBUFFER_HIGH) {
+    		doSort(sortBuffer);
+    		for (int i = 0; i < SORTBUFFER_LOW; i++) {
+    			doPutMessage(sortBuffer.get(i));
+    		}
+    		sortBuffer.subList(0, SORTBUFFER_LOW).clear();
+    	}
+    }
 
     public void createIndex()
     {
+    	// flush sort buffer
+    	for (Message m: sortBuffer) {
+    		doPutMessage(m);
+    	}
+    	sortBuffer.clear();
+    	
+    	// flush last block
     	long nLeaf = recordId;
     	int nBlock = (int)(nLeaf / L_NREC);
     	if (nLeaf % L_NREC != 0) {
@@ -422,11 +457,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		}
     	}
     	
-    	Collections.sort(result, new Comparator<Message>() {
-			public int compare(Message a, Message b) {
-				return Long.compare(a.getT(), b.getT());
-			}
-		});
+    	doSort(result);
     	
     	// 预热
     	AvgResult resultavg = new AvgResult();
