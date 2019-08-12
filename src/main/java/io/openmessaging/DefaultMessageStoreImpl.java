@@ -463,17 +463,16 @@ public class DefaultMessageStoreImpl extends MessageStore {
     @Override
     public synchronized List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
 
+    	boolean firstFlag = false;
+    	
     	if (state == 1) {
-    		synchronized (stateLock) {
-				if (state == 1) {
-					System.out.println("[" + new Date() + "]: createIndex()");
-					createIndex();
-					System.out.println("unfullBlocks=" + unfullBlocks);
-					System.out.println("uncompressableRecords = " + uncompressibleRecords.size());
-					System.out.println("[" + new Date() + "]: getMessage()");
-					state = 2;
-				}
-    		}
+			System.out.println("[" + new Date() + "]: createIndex()");
+			createIndex();
+			System.out.println("unfullBlocks=" + unfullBlocks);
+			System.out.println("uncompressableRecords = " + uncompressibleRecords.size());
+			System.out.println("[" + new Date() + "]: getMessage()");
+			state = 2;
+			firstFlag = true;
     	}
     	
     	System.gc();
@@ -492,8 +491,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	doSort(result);
     	
-    	// 预热
+    	// 为最后的查询平均值预热JVM
     	getAvgValue(aMin, aMax, tMin, tMax);
+    	if (firstFlag) {
+    		for (int i = 0; i < 30000; i++) {
+    			getAvgValue(aMin, aMax, tMin, tMax);
+    		}
+    	}
 
     	return result;
     }
