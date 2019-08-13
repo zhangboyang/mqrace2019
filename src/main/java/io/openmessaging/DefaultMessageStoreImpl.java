@@ -70,7 +70,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		long t = buffer.getLong(position + 0);
 		long a = buffer.getLong(position + 8);
 		System.arraycopy(buffer.array(), position + 16, body, 0, body.length);
-		return new Message(t, a, body); 
+		return new Message(a, t, body); 
 	}
 	
 	private static long makeLong(int high, int low)
@@ -656,7 +656,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
     					Message msg = deserializeMessage(block, (int)(i - l) * MESSAGE_SIZE);
     					if (msg.getT() != t || msg.getA() != a) {
-    						System.out.println("ERROR!");
+    						System.out.println(String.format("ERROR! msgT=%d msgA=%d; t=%d a=%d", msg.getT(), msg.getA(), t, a));
     					}
     					result.add(msg);
     				}
