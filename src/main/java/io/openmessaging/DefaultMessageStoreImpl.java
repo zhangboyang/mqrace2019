@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import sun.misc.Unsafe;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -24,64 +25,89 @@ import sun.nio.ch.FileChannelImpl;
  */
 public class DefaultMessageStoreImpl extends MessageStore {
 
-	static long makeLong(int high, int low)
+	private static void printFile(String path)
+	{
+		System.out.println("[" + new Date().toString() + "]: file=" + path); 
+		try {
+    		System.out.print(new String(Files.readAllBytes(Paths.get(path))));
+    	} catch (Exception e) {
+    		System.out.println("READ ERROR!");
+    	}
+		System.out.println("======== END OF FILE ========");
+	}
+	
+	private static String dumpMessage(Message message)
+	{
+		char[] HEX_ARRAY = "0123456789ABCDEF".toCharArray();
+    	StringBuilder s = new StringBuilder();
+    	s.append(String.format("%08X,", message.getT()));
+    	s.append(String.format("%08X,", message.getA()));
+    	byte[] bytes = message.getBody();
+    	for (int j = 0; j < bytes.length; j++) {
+            int v = bytes[j] & 0xFF;
+            s.append(HEX_ARRAY[v >>> 4]);
+            s.append(HEX_ARRAY[v & 0x0F]);
+        }
+    	return s.toString();
+	}
+	
+    private static void doSortMessage(ArrayList<Message> a)
+    {
+    	Collections.sort(a, new Comparator<Message>() {
+			public int compare(Message a, Message b) {
+				return Long.compare(a.getT(), b.getT());
+			}
+		});
+    }
+    
+	
+	private static final int MAX_MSGBUF = 1000;
+	private static final int MESSAGE_SIZE = 50;
+	
+	private static Message deserializeMessage(ByteBuffer buffer, int position)
+	{
+		byte body[] = new byte[34];
+		long t = buffer.getLong(position + 0);
+		long a = buffer.getLong(position + 8);
+		System.arraycopy(buffer.array(), position + 16, body, 0, body.length);
+		return new Message(t, a, body); 
+	}
+	
+	private static long makeLong(int high, int low)
 	{
 		return ((long)high << 32) | ((long)low & 0xFFFFFFFFL);
 	}
 	
-	static boolean rectOverlap(int aLeft, int aRight, int aBottom, int aTop, int bLeft, int bRight, int bBottom, int bTop)
+	private static boolean rectOverlap(int aLeft, int aRight, int aBottom, int aTop, int bLeft, int bRight, int bBottom, int bTop)
 	{
 		return (aLeft <= bRight && aRight >= bLeft && aTop >= bBottom && aBottom <= bTop);
 	}
 	
-	static boolean pointInRect(int lr, int bt, int rectLeft, int rectRight, int rectBottom, int rectTop)
+	private static boolean pointInRect(int lr, int bt, int rectLeft, int rectRight, int rectBottom, int rectTop)
 	{
 		return (rectLeft <= lr && lr <= rectRight && rectBottom <= bt && bt <= rectTop);
 	}
 	
-	static boolean rectInRect(int aLeft, int aRight, int aBottom, int aTop, int bLeft, int bRight, int bBottom, int bTop)
+	private static boolean rectInRect(int aLeft, int aRight, int aBottom, int aTop, int bLeft, int bRight, int bBottom, int bTop)
 	{
 		return bLeft <= aLeft && aRight <= bRight && bBottom <= aBottom && aTop <= bTop;
 	}
     
-	static boolean pointInRectL(long lr, long bt, long rectLeft, long rectRight, long rectBottom, long rectTop)
+	private static boolean pointInRectL(long lr, long bt, long rectLeft, long rectRight, long rectBottom, long rectTop)
 	{
 		return (rectLeft <= lr && lr <= rectRight && rectBottom <= bt && bt <= rectTop);
 	}
 	
-	public static byte[] hexStringToByteArray(String s) {
-	    int len = s.length();
-	    byte[] data = new byte[len / 2];
-	    for (int i = 0; i < len; i += 2) {
-	        data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
-	                             + Character.digit(s.charAt(i+1), 16));
-	    }
-	    return data;
-	}
-	
     static class MessageCompressor {
-    	// compress Message to long
-    	// if compressible,   isValid(ret) == true
+    	// compress T and A in one message with given tBase to a 24-bit integer
+    	// if compressible,   return value != 0
     	// if incompressible, isValid(ret) == false
     	
-    	static final byte[] bodyTemplate = hexStringToByteArray("0000000000158BE00000000000160BE50D2125260B5E5B2B0C3741265C0C36070000");
-    			
-    	private static byte[] getBody(long t, long a)
+    	public static int tryCompress(int tBase, long t, long a)
     	{
-    		ByteBuffer buffer = ByteBuffer.allocate(34);
-    		buffer.put(bodyTemplate);
-    		buffer.putLong(0, t);
-    		buffer.putLong(8, a);
-    		return buffer.array();
-    	}
-    	public static int doCompress(int tBase, Message message)
-    	{
-    		long t = message.getT();
-    		long a = message.getA();
-    		
     		long o = t - tBase;
     		long d = a - tBase + 10000;
-    		if (t > 0 && (0 <= o && o < 256) && (0 < d && d < 65536) && Arrays.equals(getBody(t, a), message.getBody())) {
+    		if ((0 <= o && o < 256) && (0 < d && d < 65536)) {
     			return ((int)d & 0xFFFF) | ((int)o << 16);
     		} else {
     			return 0;
@@ -99,36 +125,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	{
     		return tBase + (m & 0xFFFF) - 10000;
     	}
-    	public static Message doDecompress(int tBase, int m)
-    	{
-    		/*ByteBuffer buffer = ByteBuffer.allocate(8);
-            buffer.putLong(0, extractT(m));
-    		return new Message(extractT(m), extractA(m), buffer.array());*/
-    		int t = extractT(tBase, m);
-    		int a = extractA(tBase, m);
-    		return new Message(a, t, getBody(t, a));
-    	}
-    	public static String dumpMessage(Message message)
-    	{
-    		char[] HEX_ARRAY = "0123456789ABCDEF".toCharArray();
-	    	StringBuilder s = new StringBuilder();
-	    	s.append(String.format("%08X,", message.getT()));
-	    	s.append(String.format("%08X,", message.getA()));
-	    	byte[] bytes = message.getBody();
-	    	for (int j = 0; j < bytes.length; j++) {
-	            int v = bytes[j] & 0xFF;
-	            s.append(HEX_ARRAY[v >>> 4]);
-	            s.append(HEX_ARRAY[v & 0x0F]);
-	        }
-	    	return s.toString();
-    	}
     };
     
     private static final Unsafe unsafe;
-    
-    private static final long MEMSZ = 6 * 1024 * 1048576L;
-    private static final long memBase;
-    
+
     static {
         Unsafe theUnsafe;
         try {
@@ -139,7 +139,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
             theUnsafe = null;
         }
         unsafe = theUnsafe;
-        
+    }
+    
+    
+    private static final long MEMSZ = 6 * 1024 * 1048576L;
+    private static final long memBase;
+    
+    static {
         memBase = unsafe.allocateMemory(MEMSZ);
         unsafe.setMemory(memBase, MEMSZ, (byte)0);
     }
@@ -157,17 +163,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int I_CNT  = 6;
     private static final int I_TBASE = 7;
     
-    private static final int H = 23; // max height of HEAP
-    private static final int HEAP_ARRAY_SIZE = ((1 << (H + 1)) + 1);
-    private static final int HEAP_LEAF_BASE = 1 << H;
-    private static final int heapIntArraySize = HEAP_ARRAY_SIZE * I_SIZE;
-    private static final long heapBase;
     
     private static final int L_NREC = 256; // n-record in one block
     
+    private static final int H = 23; // max height of HEAP
+    private static final int HEAP_SIZE = ((1 << (H + 1)) + 1);
+    private static final int HEAP_LEAF_BASE = 1 << H;
+    private static final int HEAP_NINT = HEAP_SIZE * I_SIZE;
+    private static final int HEAP_NBYTE = HEAP_NINT * 4;
+    private static final long heapBase;
+    
     static {
-        heapBase = unsafe.allocateMemory(heapIntArraySize * 4);
-        unsafe.setMemory(heapBase, heapIntArraySize * 4, (byte)0);
+        heapBase = unsafe.allocateMemory(HEAP_NBYTE);
+        unsafe.setMemory(heapBase, HEAP_NBYTE, (byte)0);
     }
     
     private static int indexHeap(int offset)
@@ -180,7 +188,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     private static void indexHeapSet(int offset, int val)
     {
-    	if (offset < 0 || offset >= heapIntArraySize) {
+    	if (offset < 0 || offset >= HEAP_NINT) {
     		System.out.println("INDEX ARRAY FULL!");
     		System.exit(-1);
     	}
@@ -188,12 +196,22 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     
-
+    
+    static {
+    	printFile("/proc/cpuinfo");
+    	printFile("/proc/meminfo");
+    	
+    	System.out.println(String.format("memBase=%016X", memBase));
+    	System.out.println(String.format("heapBase=%016X", heapBase));
+    }
+    
+    
+    
     private static volatile int state = 0;
     private static Object stateLock = new Object();
     
-    private static boolean haveUncompressibleRecord = false;
-    private static ArrayList<Message> uncompressibleRecords = new ArrayList<Message>();
+    private static boolean haveIncompressibleRecord = false;
+    private static ArrayList<Message> incompressibleRecords = new ArrayList<Message>();
     
     private static void updateLeafTBase(int leafBlockId, int tBase)
     {
@@ -249,50 +267,39 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static int unfullBlocks = 0;
     
     
-    private void doPutMessage(Message message)
+    private static long doPutMessage(long msgT, long msgA)
     {
-
-    	/*if (realRecordId < 100000)
-    	{
-    		System.out.println(realRecordId + ", " + recordId + ", " + MessageCompressor.dumpMessage(message));
-    	} else {
-    		System.exit(-1);
-    	}*/
     	
     	// 如果是一个新块，则更新 tBase
     	if (recordId % L_NREC == 0) {
-    		curTBase = (int) message.getT();
+    		curTBase = (int) msgT;
     	}
     	
     	// 尝试压缩消息
-    	int msgz = MessageCompressor.doCompress(curTBase, message);
+    	int msgz = MessageCompressor.tryCompress(curTBase, msgT, msgA);
     	
     	if (!MessageCompressor.isValid(msgz)) {
     		
     		// 若压缩失败，可能是因为 偏移太大
     		// 尝试用它自己的 tBase 去压缩
-    		msgz = MessageCompressor.doCompress((int)message.getT(), message);
+    		msgz = MessageCompressor.tryCompress((int) msgT, msgT, msgA);
     		
     		if (!MessageCompressor.isValid(msgz)) {
     			// 若还是不能压缩，说明消息不能压缩，转slow path处理
-	    		System.out.println(MessageCompressor.dumpMessage(message));
-	    		haveUncompressibleRecord = true;
-	    		synchronized (uncompressibleRecords) {
-	    			uncompressibleRecords.add(message);
-	    		}
-	    		return;
+	    		
+	    		return -1;
     		}
     		
     		// 用新偏移压缩成功，新开一个块
     		recordId = (recordId / L_NREC + 1) * L_NREC;
-    		curTBase = (int) message.getT();
+    		curTBase = (int) msgT;
     		unfullBlocks++;
     	}
     	
     	// 写入存储区
     	long memOffset = recordId * 3L;
     	if (recordId % 1000000 == 0) {
-    		System.out.println(String.format("%s: realRecordId=%d recordId=%d unfullBlocks=%d", new Date().toString(), realRecordId, recordId, unfullBlocks));
+    		System.out.println(String.format("[%s]: realRecordId=%d recordId=%d unfullBlocks=%d", new Date().toString(), realRecordId, recordId, unfullBlocks));
     	}
     	if (memOffset + 4 > MEMSZ) {
     		System.out.println("ERROR: MEMORY FULL!");
@@ -312,52 +319,236 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			updateLeafIndex(blockId - 1);
     		}
     	}
-    	recordId++;
+    	
     	realRecordId++;
+    	
+    	return recordId++;
     }
     
     
-    private static void doSort(ArrayList<Message> a)
-    {
-    	Collections.sort(a, new Comparator<Message>() {
-			public int compare(Message a, Message b) {
-				return Long.compare(a.getT(), b.getT());
+    
+    
+    private static final int MAXTHREAD = 100;
+    
+    private static class PutThreadData {
+    	ByteBuffer buffer;
+    	
+    	RandomAccessFile outputFile;
+    	RandomAccessFile inputFile;
+    	
+    	volatile int outputPtr = 0;
+    }
+    
+    //private static final String storagePath = "/storage/";
+    private static final String storagePath = "/alidata1/race2019/data/";
+    
+    private static final PutThreadData putThreadDataArray[] = new PutThreadData[MAXTHREAD];
+    private static final AtomicInteger nextPutThreadId = new AtomicInteger(0);
+    private static final AtomicInteger lastReadyPutThreadId = new AtomicInteger(0);
+    
+    private static final ThreadLocal<PutThreadData> putThreadIdData = new ThreadLocal<PutThreadData>() {
+        @Override protected PutThreadData initialValue() {
+            int threadId = nextPutThreadId.getAndIncrement();
+            PutThreadData ret = new PutThreadData();
+            
+            String fn = String.format(storagePath + "thread%04d.data", threadId);
+            try {
+            	ret.outputFile = new RandomAccessFile(fn, "rw");
+            	ret.inputFile = new RandomAccessFile(fn, "r");
+            	ret.buffer = ByteBuffer.allocate(MESSAGE_SIZE * MAX_MSGBUF);
+            } catch (IOException e) {
+            	System.out.println("CAN'T OPEN FILE: " + fn);
+            	e.printStackTrace();
+            	System.exit(-1);
+            }
+            
+            putThreadDataArray[threadId] = ret;
+            lastReadyPutThreadId.getAndIncrement();
+            return ret;
+        }
+    };
+    
+    
+    private static RandomAccessFile sortedDataFile;
+    
+    private static volatile boolean putFinishedFlag = false;
+    
+    private static class MergeSortThread extends Thread {
+    	
+		public void run(){
+			System.out.println("[" + new Date().toString() + "]: merge-sort thread started!");
+			try {
+				sortedDataFile = new RandomAccessFile(storagePath + "sorted.data", "rw");
+				
+				byte dummyRecord[] = new byte[MESSAGE_SIZE];
+				
+				int inputPtr[] = new int[MAXTHREAD];
+				int bufferPtr[] = new int[MAXTHREAD];
+				int bufferCap[] = new int[MAXTHREAD];
+				ByteBuffer buffer[] = new ByteBuffer[MAXTHREAD];
+				
+				for (int i = 0; i < MAXTHREAD; i++) {
+					buffer[i] = ByteBuffer.allocate(MESSAGE_SIZE * MAX_MSGBUF);
+				}
+				
+				ByteBuffer writeBuffer = ByteBuffer.allocate(MESSAGE_SIZE * MAX_MSGBUF);
+				int writeCount = 0;
+				
+				System.out.println("[" + new Date().toString() + "]: wait for all put-thread begin ...");
+				try {
+					Thread.sleep(5000);
+				} catch (InterruptedException e) {
+				}
+				System.out.println("[" + new Date().toString() + "]: merge-sort begin!");
+				
+				int nThread = lastReadyPutThreadId.get();
+				
+				while (true) {
+					
+					boolean putFinished = putFinishedFlag;
+					
+					
+					if (nThread != nextPutThreadId.get()) {
+						System.out.println("ERROR: merge-sort started too early!");
+						System.exit(-1);
+					}
+					
+					
+					// 尝试补充数据
+					int validCnt = 0;
+					for (int i = 0; i < nThread; i++) {
+						if (bufferPtr[i] >= bufferCap[i]) {
+							PutThreadData cur = putThreadDataArray[i];
+							
+							// 计算文件中剩余记录数
+							int remainingCount = cur.outputPtr - inputPtr[i];
+							
+							if (remainingCount > 0) {
+								if (remainingCount >= MAX_MSGBUF || putFinished) {
+									int readCnt = Math.min(remainingCount, MAX_MSGBUF);
+									cur.inputFile.readFully(buffer[i].array(), 0, readCnt * MESSAGE_SIZE);
+									bufferPtr[i] = 0;
+									bufferCap[i] = readCnt;
+									inputPtr[i] += readCnt;
+								}
+							}
+						}
+						if (bufferPtr[i] < bufferCap[i]) {
+							validCnt++;
+						}
+					}
+					
+					if (validCnt == 0) {
+						if (putFinished) break;
+					}
+					
+					if (validCnt == nThread || putFinished) {
+						long minValue = Long.MAX_VALUE;
+						int minPos = -1;
+						for (int i = 0; i < nThread; i++) {
+							if (bufferPtr[i] < bufferCap[i]) {
+								long curValue = buffer[i].getLong(bufferPtr[i] * MESSAGE_SIZE);
+								if (curValue <= minValue) {
+									minValue = curValue;
+									minPos = i;
+								}
+							}
+						}
+						
+						// 登记当前记录到索引
+						long msgT = buffer[minPos].getLong(bufferPtr[minPos] * MESSAGE_SIZE + 0);
+						long msgA = buffer[minPos].getLong(bufferPtr[minPos] * MESSAGE_SIZE + 8);
+						
+						long recordId = doPutMessage(msgT, msgA);
+						if (recordId < 0) {
+							
+							// 如果不能压缩，则放入slow-path
+							Message message = deserializeMessage(buffer[minPos], bufferPtr[minPos] * MESSAGE_SIZE);
+
+							//System.out.println("incompressible: " + dumpMessage(message));
+				    		haveIncompressibleRecord = true;
+				    		incompressibleRecords.add(message);
+						} else {
+							
+							// 同步 recordId
+							// 若压缩成功，输出当前记录到排序好的文件
+							while (true) {
+								if (!writeBuffer.hasRemaining()) {
+									sortedDataFile.write(writeBuffer.array());
+									writeBuffer.position(0);
+								}
+								
+								if (writeCount < recordId) {
+									
+									writeBuffer.put(dummyRecord);
+									writeCount++;
+								} else {
+									break;
+								}
+							}
+							
+							writeBuffer.put(buffer[minPos].array(), bufferPtr[minPos] * MESSAGE_SIZE, MESSAGE_SIZE);
+							writeCount++;
+						}
+						
+						bufferPtr[minPos]++;
+					}
+
+				}
+				
+				sortedDataFile.write(writeBuffer.array(), 0, writeBuffer.position());
+				
+				System.out.println("SORT COMPLETE!");
+				
+			} catch (Exception e) {
+				System.out.println("SORT ERROR!");
+				e.printStackTrace();
+				System.exit(-1);
 			}
-		});
-    }
-    
-    private static final int SORTBUFFER_LOW  = 100000;
-    private static final int SORTBUFFER_HIGH = 200000;
-    private static ArrayList<Message> sortBuffer = new ArrayList<Message>();
+		}
+	}
+    private static MergeSortThread mergeSortThread;
     
     @Override
-    public synchronized void put(Message message) {
+    public void put(Message message) {
+    	
     	if (state == 0) {
-			System.out.println("[" + new Date() + "]: put()");
-			System.out.println(String.format("memBase=%016X", memBase));
-			state = 1;
+    		synchronized (stateLock) {
+    			if (state == 0) {
+					System.out.println("[" + new Date() + "]: put() started");
+					mergeSortThread = new MergeSortThread();
+					mergeSortThread.start();
+					state = 1;
+    			}
+    		}
     	}
     	
-    	sortBuffer.add(message);
-    	if (sortBuffer.size() >= SORTBUFFER_HIGH) {
-    		doSort(sortBuffer);
-    		for (int i = 0; i < SORTBUFFER_LOW; i++) {
-    			doPutMessage(sortBuffer.get(i));
-    		}
-    		sortBuffer.subList(0, SORTBUFFER_LOW).clear();
-    		
-    		System.gc();
-    	}
+    	PutThreadData td = putThreadIdData.get();
+    	ByteBuffer buffer = td.buffer;
+    	
+		long t = message.getT();
+		long a = message.getA();
+		byte[] body = message.getBody();
+		
+		buffer.putLong(t);
+		buffer.putLong(a);
+		buffer.put(body);
+		
+		if (!buffer.hasRemaining()) {
+			try {
+				td.outputFile.write(buffer.array());
+				buffer.position(0);
+				td.outputPtr += MAX_MSGBUF; 
+			} catch (IOException e) {
+				System.out.println("ERROR WRITING MESSAGE!");
+				e.printStackTrace();
+				System.exit(-1);
+			}
+		}
     }
 
-    public void createIndex()
+    private static void updateIndexHeap()
     {
-    	// flush sort buffer
-    	for (Message m: sortBuffer) {
-    		doPutMessage(m);
-    	}
-    	sortBuffer.clear();
-    	sortBuffer = null;
     	
     	// flush last block
     	long nLeaf = recordId;
@@ -393,14 +584,48 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	System.out.println("nLeaf : " + nLeaf);
     	System.out.println("nBlock: " + nBlock);
-    	
-    	try {
-    		System.out.print(new String(Files.readAllBytes(Paths.get("/proc/meminfo"))));
-    	} catch (Exception e) {
-    	}
     }
     
-    public void doGetMessage(ArrayList<Message> result, int cur, int aMin, int aMax, int tMin, int tMax)
+    
+    private static void createIndex()
+    {
+		try {
+			System.out.println("[" + new Date() + "]: flushing remaining buffers ...");
+			int totalMsg = 0;
+			int nThread = lastReadyPutThreadId.get();
+			for (int i = 0; i < nThread; i++) {
+				PutThreadData td = putThreadDataArray[i];
+				int remainingCnt = td.buffer.position() / MESSAGE_SIZE;
+				if (remainingCnt > 0) {
+					td.outputFile.write(td.buffer.array(), 0, td.buffer.position());
+					td.outputPtr += remainingCnt;
+				}
+				totalMsg += td.outputPtr;
+				System.out.println(String.format("thread %d: %d", i, td.outputPtr));
+			}
+			System.out.println(String.format("total: %d", totalMsg));
+			
+			System.out.println("[" + new Date() + "]: waiting merge-sort thread ...");
+			putFinishedFlag = true;
+			mergeSortThread.join();
+			
+			System.out.println("[" + new Date() + "]: merge-sort finished.");
+		} catch (Exception e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
+		
+		System.out.println("[" + new Date() + "]: updateIndexHeap()");
+		updateIndexHeap();
+		System.out.println("unfullBlocks: " + unfullBlocks);
+		System.out.println("incompressibleRecords: " + incompressibleRecords.size());
+		
+		printFile("/proc/meminfo");
+    }
+    
+    
+    
+    private static void doGetMessage(ArrayList<Message> result, int cur, int aMin, int aMax, int tMin, int tMax)
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
@@ -408,6 +633,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		
     		long l = (cur - HEAP_LEAF_BASE) * L_NREC;
     		long r = l + L_NREC;
+    		
+    		ByteBuffer block = ByteBuffer.allocate(MESSAGE_SIZE * L_NREC);
+    		
+    		try {
+    			sortedDataFile.seek(l * MESSAGE_SIZE);
+    			sortedDataFile.read(block.array());
+    		} catch (IOException e) {
+    			System.out.println("ERROR READING BLOCK!");
+    			e.printStackTrace();
+    			System.exit(-1);
+    		}
+    		
+    		
     		for (long i = l; i < r; i++) {
     			
     			int m = unsafe.getInt(memBase + i * 3);
@@ -416,7 +654,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				int a = MessageCompressor.extractA(tBase, m);
     				
     				if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
-    					result.add(MessageCompressor.doDecompress(tBase, m));
+    					Message msg = deserializeMessage(block, (int)(i - l) * MESSAGE_SIZE);
+    					if (msg.getT() != t || msg.getA() != a) {
+    						System.out.println("ERROR!");
+    					}
+    					result.add(msg);
     				}
     			}
     		}
@@ -427,23 +669,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int rch = cur * 2 + 1;
 		int lch_base = I_SIZE * lch;
 		int rch_base = I_SIZE * rch;
-		/*System.out.println(String.format("%d lch %d,%d,%d,%d,%d,%d", cur,
-				indexHeap(lch_base + I_MINT),
-				indexHeap(lch_base + I_MAXT),
-				indexHeap(lch_base + I_MINA),
-				indexHeap(lch_base + I_MAXA),
-				makeLong(indexHeap(lch_base + I_SUMH), indexHeap(lch_base + I_SUML)),
-				indexHeap(lch_base + I_CNT )
-		));
-		System.out.println(String.format("%d rch %d,%d,%d,%d,%d,%d", cur,
-				indexHeap(rch_base + I_MINT),
-				indexHeap(rch_base + I_MAXT),
-				indexHeap(rch_base + I_MINA),
-				indexHeap(rch_base + I_MAXA),
-				makeLong(indexHeap(rch_base + I_SUMH), indexHeap(rch_base + I_SUML)),
-				indexHeap(rch_base + I_CNT )
-		));*/
-		
+
 		if (rectOverlap(
 				indexHeap(lch_base + I_MINT), indexHeap(lch_base + I_MAXT),
 				indexHeap(lch_base + I_MINA), indexHeap(lch_base + I_MAXA),
@@ -466,11 +692,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	boolean firstFlag = false;
     	
     	if (state == 1) {
-			System.out.println("[" + new Date() + "]: createIndex()");
-			createIndex();
-			System.out.println("unfullBlocks=" + unfullBlocks);
-			System.out.println("uncompressableRecords = " + uncompressibleRecords.size());
-			System.out.println("[" + new Date() + "]: getMessage()");
+    		System.out.println("[" + new Date() + "]: getMessage() started");
+    		createIndex();
 			state = 2;
 			firstFlag = true;
     	}
@@ -481,15 +704,22 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	doGetMessage(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
 
-    	if (haveUncompressibleRecord) {
-    		for (Message msg: uncompressibleRecords) {
+    	if (haveIncompressibleRecord) {
+    		//for (Message msg: result) {
+    		//	System.out.println(msg.getT());
+    		//}
+    		//System.out.println(String.format("%d %d %d %d", aMin, aMax, tMin, tMax));
+    		for (Message msg: incompressibleRecords) {
     			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
 					result.add(msg);
+					//System.out.println("put: " + msg.getT());
 				}
     		}
+    		
+    		doSortMessage(result);
+    		
+    		
     	}
-    	
-    	doSort(result);
     	
     	// 为最后的查询平均值预热JVM
     	getAvgValue(aMin, aMax, tMin, tMax);
@@ -504,12 +734,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
 
     
-    class AvgResult {
+    private static class AvgResult {
     	long sum;
     	int cnt;
     }
     
-    public void doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
+    private static void doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
@@ -585,8 +815,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	AvgResult result = new AvgResult();
     	doGetAvgValue(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
     	
-    	if (haveUncompressibleRecord) {
-    		for (Message msg: uncompressibleRecords) {
+    	if (haveIncompressibleRecord) {
+    		for (Message msg: incompressibleRecords) {
     			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
 					result.sum += msg.getA();
 					result.cnt++;

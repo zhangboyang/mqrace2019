@@ -14,14 +14,14 @@ public class DemoTester {
     public static void main(String args[]) throws Exception {
         //评测相关配置
         //发送阶段的发送数量，也即发送阶段必须要在规定时间内把这些消息发送完毕方可
-        int msgNum = 140000;
+        int msgNum = 1400000000;
         //发送阶段的最大持续时间，也即在该时间内，如果消息依然没有发送完毕，则退出评测
         int sendTime = 30 * 60 * 1000;
         //查询阶段的最大持续时间，也即在该时间内，如果消息依然没有消费完毕，则退出评测
         int checkTime = 30 * 60 * 1000;
 
         //正确性检测的次数
-        int getMessageTimes = 3000;
+        int getMessageTimes = 30;
         int checkTimes = 30000;
         //发送的线程数量
         int sendTsNum = 10;
@@ -206,12 +206,17 @@ public class DemoTester {
                     Iterator<Message> iter = msgs.iterator();
                     while (iter.hasNext()) {
                         if (index1 > index2) {
+                        	System.out.println("ERROR1");
                             checkError();
                         }
 
                         Message msg = iter.next();
                         if (msg.getA() != msg.getT() || msg.getA() != index1 ||
                                 ByteBuffer.wrap(msg.getBody()).getLong() != index1) {
+                        	System.out.println("T="+ msg.getT());
+                        	System.out.println("A="+ msg.getA());
+                        	System.out.println("index1="+ index1);
+                        	System.out.println("ERROR2");
                             checkError();
                         }
 
@@ -220,6 +225,7 @@ public class DemoTester {
                             msg = iter.next();
                             if (msg.getA() != msg.getT() || msg.getA() != index1
                                     || ByteBuffer.wrap(msg.getBody()).getLong() != index1) {
+                            	System.out.println("ERROR3");
                                 checkError();
                             }
                         }
@@ -229,6 +235,7 @@ public class DemoTester {
 
 
                     if (index1 - 1 != index2) {
+                    	System.out.println("ERROR4");
                         checkError();
                     }
 
