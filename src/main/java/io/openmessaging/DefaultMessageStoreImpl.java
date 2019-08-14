@@ -339,7 +339,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	volatile int outputPtr = 0;
     }
     
-    //private static final String storagePath = "/storage/";
+    //private static final String storagePath = "./";
     private static final String storagePath = "/alidata1/race2019/data/";
     
     private static final PutThreadData putThreadDataArray[] = new PutThreadData[MAXTHREAD];
@@ -724,9 +724,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	
     	// 为最后的查询平均值预热JVM
+    	avgQueryCount.set(-1);
     	getAvgValue(aMin, aMax, tMin, tMax);
     	if (firstFlag) {
     		for (int i = 0; i < 30000; i++) {
+    			avgQueryCount.set(-1);
     			getAvgValue(aMin, aMax, tMin, tMax);
     		}
     	}
@@ -741,10 +743,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int cnt;
     }
     
+    private static final AtomicInteger avgQueryCount = new AtomicInteger(0); 
+    private static final AtomicLong avgQueryCost = new AtomicLong(0);
+    private static final AtomicInteger avgQueryLeafCount = new AtomicInteger(0);
+    private static final AtomicLong avgQueryLeafCost = new AtomicLong(0);
+    private static final AtomicLong avgQueryStartTime = new AtomicLong(0);
+    
     private static void doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
+    		
+    		long st = System.nanoTime();
     		
     		int tBase = indexHeap(cur * I_SIZE + I_TBASE);
     		
@@ -771,6 +781,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 					result.cnt++;
 				}
     		}
+    		
+    		avgQueryLeafCost.addAndGet(System.nanoTime() - st);
+    		avgQueryLeafCount.incrementAndGet();
     		
     		return;
     	}
@@ -813,7 +826,16 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
-
+    	
+    	int qId = avgQueryCount.getAndIncrement();
+    	if (qId == 0) {
+    		avgQueryStartTime.set(System.nanoTime());
+    	    avgQueryCost.set(0); 
+    	    avgQueryLeafCount.set(0); 
+    	    avgQueryLeafCost.set(0);
+    	}
+    	long st = System.nanoTime();
+    	
     	AvgResult result = new AvgResult();
     	doGetAvgValue(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
     	
@@ -824,6 +846,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
 					result.cnt++;
 				}
     		}
+    	}
+    	
+    	avgQueryCost.addAndGet(System.nanoTime() - st);
+    	
+    	if (qId >= 30000 - 1) {
+    		long avgQueryEndTime = System.nanoTime();
+    		
+    		System.out.println("====== SUMMARY ======\n" + new Date().toString());
+    		System.out.println(String.format("total query time: %.4f", (avgQueryEndTime - avgQueryStartTime.get()) * 1e-6));
+    		System.out.println(String.format("cost : leaf %.1f query %.1f (%.4f)", avgQueryLeafCost.get() * 1e-6, avgQueryCost.get() * 1e-6, (double)avgQueryLeafCost.get() / avgQueryCost.get()));
+    		System.out.println(String.format("count: leaf %d query %d (%.4f)", avgQueryLeafCount.get(), avgQueryCount.get(), (double)avgQueryLeafCount.get() / avgQueryCount.get()));
     	}
     	
     	return result.cnt == 0 ? 0 : result.sum / result.cnt;
