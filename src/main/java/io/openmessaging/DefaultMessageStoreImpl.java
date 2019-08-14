@@ -785,7 +785,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				}
     		}
     		
-    		result.sum += sum + cnt * (tBase - MessageCompressor.AOFFSET);
+    		result.sum += sum + cnt * ((long)tBase - MessageCompressor.AOFFSET);
     		result.cnt += cnt;
     		
     		
