@@ -48,7 +48,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		System.gc();
 		System.out.println(getJVMHeapInfo());
     	printFile("/proc/meminfo");
-    	System.exit(-1);
 	}
 	
 	private static String dumpMessage(Message message)
@@ -354,6 +353,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	RandomAccessFile inputFile;
     }
+    private static final AtomicLong putCount = new AtomicLong(0);
     
     private static final PutThreadData putThreadDataArray[] = new PutThreadData[MAXTHREAD];
     private static final AtomicInteger putThreadCount = new AtomicInteger(0);
@@ -397,6 +397,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			
 			byte dummyRecord[] = new byte[MESSAGE_SIZE];
 			
+			long arrayFront[] = new long[MAXTHREAD];
+			
 			int inputPtr[] = new int[MAXTHREAD];
 			int bufferPtr[] = new int[MAXTHREAD];
 			int bufferCap[] = new int[MAXTHREAD];
@@ -409,14 +411,16 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			ByteBuffer writeBuffer = ByteBuffer.allocate(MESSAGE_SIZE * MAX_MSGBUF);
 			int writeCount = 0;
 			
-			
-			
 			int nThread = putThreadCount.get();
 			
+			
 			while (true) {
-				
-				// 尝试补充数据
+
+				long minValue = Long.MAX_VALUE;
+				int minPos = -1;
 				for (int i = 0; i < nThread; i++) {
+					
+					// 如果缓冲区空，尝试补充数据
 					if (bufferPtr[i] >= bufferCap[i]) {
 						PutThreadData cur = putThreadDataArray[i];
 						
@@ -429,15 +433,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
 							bufferPtr[i] = 0;
 							bufferCap[i] = readCnt;
 							inputPtr[i] += readCnt;
+							arrayFront[i] = buffer[i].getLong(0);
 						}
 					}
-				}
-
-				long minValue = Long.MAX_VALUE;
-				int minPos = -1;
-				for (int i = 0; i < nThread; i++) {
+					
+					// 比小
 					if (bufferPtr[i] < bufferCap[i]) {
-						long curValue = buffer[i].getLong(bufferPtr[i] * MESSAGE_SIZE);
+						long curValue = arrayFront[i];
 						if (curValue <= minValue) {
 							minValue = curValue;
 							minPos = i;
@@ -486,7 +488,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				}
 				
 				bufferPtr[minPos]++;
-
+				if (bufferPtr[minPos] < bufferCap[minPos]) {
+					arrayFront[minPos] = buffer[minPos].getLong(bufferPtr[minPos] * MESSAGE_SIZE);
+				}
 			}
 			
 			sortedDataFile.write(writeBuffer.array(), 0, writeBuffer.position());
@@ -497,6 +501,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
 		
+		Arrays.fill(putThreadDataArray, null);
 		System.out.println("[" + new Date().toString() + "]: merge-sort completed!");
     }
     
@@ -528,12 +533,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			try {
 				td.outputFile.write(buffer.array());
 				buffer.position(0);
-				td.outputPtr += MAX_MSGBUF; 
+				td.outputPtr += MAX_MSGBUF;
+
 			} catch (IOException e) {
 				System.out.println("ERROR WRITING MESSAGE!");
 				e.printStackTrace();
 				System.exit(-1);
 			}
+		}
+		
+		if (putCount.incrementAndGet() % (MAX_MSGBUF * MAXTHREAD) == 0) {
+			System.gc();
 		}
     }
     
@@ -607,8 +617,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     {
 		try {
 			
+			System.gc();
 			flushPutBuffer();
 			externalMergeSort();
+			System.gc();
 			
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -620,6 +632,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		System.out.println("unfullBlocks: " + unfullBlocks);
 		System.out.println("incompressibleRecords: " + incompressibleRecords.size());
 		
+		System.gc();
+		System.out.println(getJVMHeapInfo());
 		printFile("/proc/meminfo");
     }
     
