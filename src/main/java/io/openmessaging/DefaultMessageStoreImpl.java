@@ -27,13 +27,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
 	private static void printFile(String path)
 	{
-		System.out.println("[" + new Date().toString() + "]: file=" + path); 
+		System.out.println(String.format("======== %s ========", path)); 
 		try {
     		System.out.print(new String(Files.readAllBytes(Paths.get(path))));
     	} catch (Exception e) {
     		System.out.println("READ ERROR!");
     	}
 		System.out.println("======== END OF FILE ========");
+	}
+	
+	static {
+    	//printFile("/proc/cpuinfo");
+    	printFile("/proc/meminfo");
 	}
 	
 	private static String dumpMessage(Message message)
@@ -99,23 +104,23 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	}
 	
     static class MessageCompressor {
+    	public static final int AOFFSET = 10000;
+
     	// compress T and A in one message with given tBase to a 24-bit integer
-    	// if compressible,   return value != 0
-    	// if incompressible, isValid(ret) == false
-    	
     	public static int tryCompress(int tBase, long t, long a)
     	{
+    		//if (t % 2 == 0 || (t / 2) % 2 == 0) return 0xFFFFFF;
     		long o = t - tBase;
-    		long d = a - tBase + 10000;
-    		if ((0 <= o && o < 256) && (0 < d && d < 65536)) {
+    		long d = a - tBase + AOFFSET;
+    		if ((0 <= o && o <= 254) && (0 <= d && d <= 65535)) {
     			return ((int)d & 0xFFFF) | ((int)o << 16);
     		} else {
-    			return 0;
+    			return 0xFFFFFF;
     		}
     	}
     	public static boolean isValid(int m)
     	{
-    		return (m & 0xFFFFFF) != 0;
+    		return (m & 0xFFFFFF) != 0xFFFFFF;
     	}
     	public static int extractT(int tBase, int m)
     	{
@@ -123,7 +128,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	public static int extractA(int tBase, int m)
     	{
-    		return tBase + (m & 0xFFFF) - 10000;
+    		return tBase + (m & 0xFFFF) - AOFFSET;
     	}
     };
     
@@ -150,7 +155,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     static {
         memBase = unsafe.allocateMemory(MEMSZ);
-        unsafe.setMemory(memBase, MEMSZ, (byte)0);
+        unsafe.setMemory(memBase, MEMSZ, (byte)0xFF);
     }
     
     
@@ -201,8 +206,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     static {
-    	printFile("/proc/cpuinfo");
-    	printFile("/proc/meminfo");
     	
     	System.out.println(String.format("memBase=%016X", memBase));
     	System.out.println(String.format("heapBase=%016X", heapBase));
@@ -308,7 +311,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		System.out.println("ERROR: MEMORY FULL!");
     		System.exit(-1);
     	}
-    	unsafe.putInt(memBase + memOffset, msgz);
+    	unsafe.putShort(memBase + memOffset, (short)(msgz & 0xFFFF));
+    	unsafe.putByte(memBase + memOffset + 2, (byte)((msgz >> 16) & 0xFF));
     	
     	// 若是新的块
     	if (recordId % L_NREC == 0) {
@@ -708,11 +712,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	
     	// 为最后的查询平均值预热JVM
-    	avgQueryCount.set(-1);
+//    	avgQueryCount.set(-1);
     	getAvgValue(aMin, aMax, tMin, tMax);
     	if (firstFlag) {
     		for (int i = 0; i < 30000; i++) {
-    			avgQueryCount.set(-1);
+//    			avgQueryCount.set(-1);
     			getAvgValue(aMin, aMax, tMin, tMax);
     		}
     	}
@@ -727,98 +731,114 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int cnt;
     }
     
-    private static final AtomicInteger avgQueryCount = new AtomicInteger(0); 
-    private static final AtomicLong avgQueryCost = new AtomicLong(0);
-    private static final AtomicInteger avgQueryLeafCount = new AtomicInteger(0);
-    private static final AtomicLong avgQueryLeafCost = new AtomicLong(0);
-    private static final AtomicLong avgQueryStartTime = new AtomicLong(0);
+//    private static final AtomicInteger avgQueryCount = new AtomicInteger(0); 
+//    private static final AtomicLong avgQueryCost = new AtomicLong(0);
+//    private static final AtomicInteger avgQueryLeafCount = new AtomicInteger(0);
+//    private static final AtomicLong avgQueryLeafCost = new AtomicLong(0);
+//    private static final AtomicLong avgQueryStartTime = new AtomicLong(0);
     
     private static void doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
     		
-    		long st = System.nanoTime();
+//    		long st = System.nanoTime();
     		
     		int tBase = indexHeap(cur * I_SIZE + I_TBASE);
+    		
+    		int tRelMin = tMin - tBase;
+    		int tRelMax = Math.min(254, tMax - tBase);
+    		
+    		int aRelMin = aMin - tBase + MessageCompressor.AOFFSET;
+    		int aRelMax = aMax - tBase + MessageCompressor.AOFFSET;
     		
     		long l = (cur - HEAP_LEAF_BASE) * L_NREC;
     		long r = l + L_NREC;
     		
+    		int cnt = 0;
+    		int sum = 0;
+    		
+    		long lUpper = r;
+    		while (lUpper - l > 1) {
+    			long m = (l + lUpper) / 2;
+    			int tRel = ((int)unsafe.getByte(memBase + m * 3 + 2) & 0xFF);
+    			if (tRel < tRelMin) {
+    				l = m;
+    			} else {
+    				lUpper = m;
+    			}
+    		}
+    		
     		for (long i = l; i < r; i++) {
     			
-        		
-    			//int m = unsafe.getInt(memBase + i * 3);
-    			int s0 = ((int)unsafe.getShort(memBase + i * 3) & 0xFFFF);
-    			
-    			//if (MessageCompressor.isValid(m)) {
-    			if (s0 == 0) break;
-    			
-				//int t = MessageCompressor.extractT(tBase, m);
-				//int a = MessageCompressor.extractA(tBase, m);
-				int t = tBase + ((int)unsafe.getByte(memBase + i * 3 + 2) & 0xFF);
-        		int a = tBase + s0 - 10000;
-        		
+				int tRel = ((int)unsafe.getByte(memBase + i * 3 + 2) & 0xFF);
+				if (tRel > tRelMax) break;
 				
-				if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
-					result.sum += a;
-					result.cnt++;
+				if (tRelMin <= tRel) {
+					
+					int aRel = ((int)unsafe.getShort(memBase + i * 3) & 0xFFFF);
+				
+					if (aRelMin <= aRel && aRel <= aRelMax) {
+						sum += aRel;
+						cnt++;
+					}
 				}
     		}
     		
-    		avgQueryLeafCost.addAndGet(System.nanoTime() - st);
-    		avgQueryLeafCount.incrementAndGet();
+    		result.sum += sum + cnt * (tBase - MessageCompressor.AOFFSET);
+    		result.cnt += cnt;
+    		
+    		
+//    		avgQueryLeafCost.addAndGet(System.nanoTime() - st);
+//    		avgQueryLeafCount.incrementAndGet();
     		
     		return;
     	}
     	
     	int lch = cur * 2;
-    	int rch = cur * 2 + 1;
-		int lch_base = I_SIZE * lch;
-		int rch_base = I_SIZE * rch;
+    	int lch_base = I_SIZE * lch;
+		int lch_minT = indexHeap(lch_base + I_MINT);
+		int lch_maxT = indexHeap(lch_base + I_MAXT);
+		int lch_minA = indexHeap(lch_base + I_MINA);
+		int lch_maxA = indexHeap(lch_base + I_MAXA);
 		
-		if (rectInRect(
-				indexHeap(lch_base + I_MINT), indexHeap(lch_base + I_MAXT),
-				indexHeap(lch_base + I_MINA), indexHeap(lch_base + I_MAXA),
-				tMin, tMax,
-				aMin, aMax)) {
-			result.sum += indexHeapL(lch_base + I_SUML);
-			result.cnt += indexHeap(lch_base + I_CNT );
-		} else if (rectOverlap(
-					indexHeap(lch_base + I_MINT), indexHeap(lch_base + I_MAXT),
-					indexHeap(lch_base + I_MINA), indexHeap(lch_base + I_MAXA),
-					tMin, tMax,
-					aMin, aMax)) {
-			doGetAvgValue(result, lch, aMin, aMax, tMin, tMax);
+    	int rch = cur * 2 + 1;
+		int rch_base = I_SIZE * rch;
+		int rch_minT = indexHeap(rch_base + I_MINT);
+		int rch_maxT = indexHeap(rch_base + I_MAXT);
+		int rch_minA = indexHeap(rch_base + I_MINA);
+		int rch_maxA = indexHeap(rch_base + I_MAXA);
+		
+		if (rectOverlap(lch_minT, lch_maxT, lch_minA, lch_maxA, tMin, tMax, aMin, aMax)) {
+			if (rectInRect(lch_minT, lch_maxT, lch_minA, lch_maxA, tMin, tMax, aMin, aMax)) {
+				result.sum += indexHeapL(lch_base + I_SUML);
+				result.cnt += indexHeap(lch_base + I_CNT );
+			} else {
+				doGetAvgValue(result, lch, aMin, aMax, tMin, tMax);
+			}
 		}
 		
-		if (rectInRect(
-				indexHeap(rch_base + I_MINT), indexHeap(rch_base + I_MAXT),
-				indexHeap(rch_base + I_MINA), indexHeap(rch_base + I_MAXA),
-				tMin, tMax,
-				aMin, aMax)) {
-			result.sum += indexHeapL(rch_base + I_SUML);
-			result.cnt += indexHeap(rch_base + I_CNT );
-		} else if (rectOverlap(
-					indexHeap(rch_base + I_MINT), indexHeap(rch_base + I_MAXT),
-					indexHeap(rch_base + I_MINA), indexHeap(rch_base + I_MAXA),
-					tMin, tMax,
-					aMin, aMax)) {
-			doGetAvgValue(result, rch, aMin, aMax, tMin, tMax);
+		if (rectOverlap(rch_minT, rch_maxT, rch_minA, rch_maxA, tMin, tMax, aMin, aMax)) {
+			if (rectInRect(rch_minT, rch_maxT, rch_minA, rch_maxA, tMin, tMax, aMin, aMax)) {
+				result.sum += indexHeapL(rch_base + I_SUML);
+				result.cnt += indexHeap(rch_base + I_CNT );
+			} else {
+				doGetAvgValue(result, rch, aMin, aMax, tMin, tMax);
+			}
 		}
     }
     
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
     	
-    	int qId = avgQueryCount.getAndIncrement();
-    	if (qId == 0) {
-    		avgQueryStartTime.set(System.nanoTime());
-    	    avgQueryCost.set(0); 
-    	    avgQueryLeafCount.set(0); 
-    	    avgQueryLeafCost.set(0);
-    	}
-    	long st = System.nanoTime();
+//    	int qId = avgQueryCount.getAndIncrement();
+//    	if (qId == 0) {
+//    		avgQueryStartTime.set(System.nanoTime());
+//    	    avgQueryCost.set(0); 
+//    	    avgQueryLeafCount.set(0); 
+//    	    avgQueryLeafCost.set(0);
+//    	}
+//    	long st = System.nanoTime();
     	
     	AvgResult result = new AvgResult();
     	doGetAvgValue(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
@@ -832,16 +852,16 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		}
     	}
     	
-    	avgQueryCost.addAndGet(System.nanoTime() - st);
-    	
-    	if (qId >= 30652 - 1) {
-    		long avgQueryEndTime = System.nanoTime();
-    		
-    		System.out.println("====== SUMMARY ======\n" + new Date().toString());
-    		System.out.println(String.format("total query time: %.4f", (avgQueryEndTime - avgQueryStartTime.get()) * 1e-6));
-    		System.out.println(String.format("cost : leaf %.1f query %.1f (%.4f)", avgQueryLeafCost.get() * 1e-6, avgQueryCost.get() * 1e-6, (double)avgQueryLeafCost.get() / avgQueryCost.get()));
-    		System.out.println(String.format("count: leaf %d query %d (%.4f)", avgQueryLeafCount.get(), avgQueryCount.get(), (double)avgQueryLeafCount.get() / avgQueryCount.get()));
-    	}
+//    	avgQueryCost.addAndGet(System.nanoTime() - st);
+//    	
+//    	if (qId >= 30652 - 1) {
+//    		long avgQueryEndTime = System.nanoTime();
+//    		
+//    		System.out.println("====== SUMMARY ======\n" + new Date().toString());
+//    		System.out.println(String.format("total query time: %.4f", (avgQueryEndTime - avgQueryStartTime.get()) * 1e-6));
+//    		System.out.println(String.format("cost : leaf %.1f query %.1f (%.4f)", avgQueryLeafCost.get() * 1e-6, avgQueryCost.get() * 1e-6, (double)avgQueryLeafCost.get() / avgQueryCost.get()));
+//    		System.out.println(String.format("count: leaf %d query %d (%.4f)", avgQueryLeafCount.get(), avgQueryCount.get(), (double)avgQueryLeafCount.get() / avgQueryCount.get()));
+//    	}
     	
     	return result.cnt == 0 ? 0 : result.sum / result.cnt;
     }
