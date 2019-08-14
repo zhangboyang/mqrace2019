@@ -141,8 +141,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
         unsafe = theUnsafe;
     }
     
+    //private static final String storagePath = "./";
+    private static final String storagePath = "/alidata1/race2019/data/";
     
-    private static final long MEMSZ = 6 * 1024 * 1048576L;
+    //private static final long MEMSZ = 30000000L * 3;
+    private static final long MEMSZ = 2100000000L * 3;
     private static final long memBase;
     
     static {
@@ -331,31 +334,31 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int MAXTHREAD = 100;
     
     private static class PutThreadData {
-    	ByteBuffer buffer;
-    	
     	RandomAccessFile outputFile;
-    	RandomAccessFile inputFile;
+    	ByteBuffer buffer;
+    	int outputPtr = 0;
     	
-    	volatile int outputPtr = 0;
+    	RandomAccessFile inputFile;
     }
     
-    //private static final String storagePath = "./";
-    private static final String storagePath = "/alidata1/race2019/data/";
-    
     private static final PutThreadData putThreadDataArray[] = new PutThreadData[MAXTHREAD];
-    private static final AtomicInteger nextPutThreadId = new AtomicInteger(0);
-    private static final AtomicInteger lastReadyPutThreadId = new AtomicInteger(0);
+    private static final AtomicInteger putThreadCount = new AtomicInteger(0);
     
     private static final ThreadLocal<PutThreadData> putThreadIdData = new ThreadLocal<PutThreadData>() {
         @Override protected PutThreadData initialValue() {
-            int threadId = nextPutThreadId.getAndIncrement();
+            int threadId = putThreadCount.getAndIncrement();
             PutThreadData ret = new PutThreadData();
+            
+            ret.buffer = ByteBuffer.allocate(MESSAGE_SIZE * MAX_MSGBUF);
+            ret.outputPtr = 0;
             
             String fn = String.format(storagePath + "thread%04d.data", threadId);
             try {
             	ret.outputFile = new RandomAccessFile(fn, "rw");
+            	ret.outputFile.setLength(0);
+            	
             	ret.inputFile = new RandomAccessFile(fn, "r");
-            	ret.buffer = ByteBuffer.allocate(MESSAGE_SIZE * MAX_MSGBUF);
+            	
             } catch (IOException e) {
             	System.out.println("CAN'T OPEN FILE: " + fn);
             	e.printStackTrace();
@@ -363,7 +366,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
             }
             
             putThreadDataArray[threadId] = ret;
-            lastReadyPutThreadId.getAndIncrement();
             return ret;
         }
     };
@@ -371,143 +373,119 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static RandomAccessFile sortedDataFile;
     
-    private static volatile boolean putFinishedFlag = false;
-    
-    private static class MergeSortThread extends Thread {
+    private static void externalMergeSort()
+    {
+    	System.out.println("[" + new Date().toString() + "]: merge-sort begin!");
     	
-		public void run(){
-			System.out.println("[" + new Date().toString() + "]: merge-sort thread started!");
-			try {
-				sortedDataFile = new RandomAccessFile(storagePath + "sorted.data", "rw");
-				
-				byte dummyRecord[] = new byte[MESSAGE_SIZE];
-				
-				int inputPtr[] = new int[MAXTHREAD];
-				int bufferPtr[] = new int[MAXTHREAD];
-				int bufferCap[] = new int[MAXTHREAD];
-				ByteBuffer buffer[] = new ByteBuffer[MAXTHREAD];
-				
-				for (int i = 0; i < MAXTHREAD; i++) {
-					buffer[i] = ByteBuffer.allocate(MESSAGE_SIZE * MAX_MSGBUF);
-				}
-				
-				ByteBuffer writeBuffer = ByteBuffer.allocate(MESSAGE_SIZE * MAX_MSGBUF);
-				int writeCount = 0;
-				
-				System.out.println("[" + new Date().toString() + "]: wait for all put-thread begin ...");
-				try {
-					Thread.sleep(5000);
-				} catch (InterruptedException e) {
-				}
-				System.out.println("[" + new Date().toString() + "]: merge-sort begin!");
-				
-				int nThread = lastReadyPutThreadId.get();
-				
-				while (true) {
-					
-					boolean putFinished = putFinishedFlag;
-					
-					
-					if (nThread != nextPutThreadId.get()) {
-						System.out.println("ERROR: merge-sort started too early!");
-						System.exit(-1);
-					}
-					
-					
-					// 尝试补充数据
-					int validCnt = 0;
-					for (int i = 0; i < nThread; i++) {
-						if (bufferPtr[i] >= bufferCap[i]) {
-							PutThreadData cur = putThreadDataArray[i];
-							
-							// 计算文件中剩余记录数
-							int remainingCount = cur.outputPtr - inputPtr[i];
-							
-							if (remainingCount > 0) {
-								if (remainingCount >= MAX_MSGBUF || putFinished) {
-									int readCnt = Math.min(remainingCount, MAX_MSGBUF);
-									cur.inputFile.readFully(buffer[i].array(), 0, readCnt * MESSAGE_SIZE);
-									bufferPtr[i] = 0;
-									bufferCap[i] = readCnt;
-									inputPtr[i] += readCnt;
-								}
-							}
-						}
-						if (bufferPtr[i] < bufferCap[i]) {
-							validCnt++;
-						}
-					}
-					
-					if (validCnt == 0) {
-						if (putFinished) break;
-					}
-					
-					if (validCnt == nThread || putFinished) {
-						long minValue = Long.MAX_VALUE;
-						int minPos = -1;
-						for (int i = 0; i < nThread; i++) {
-							if (bufferPtr[i] < bufferCap[i]) {
-								long curValue = buffer[i].getLong(bufferPtr[i] * MESSAGE_SIZE);
-								if (curValue <= minValue) {
-									minValue = curValue;
-									minPos = i;
-								}
-							}
-						}
-						
-						// 登记当前记录到索引
-						long msgT = buffer[minPos].getLong(bufferPtr[minPos] * MESSAGE_SIZE + 0);
-						long msgA = buffer[minPos].getLong(bufferPtr[minPos] * MESSAGE_SIZE + 8);
-						
-						long recordId = doPutMessage(msgT, msgA);
-						if (recordId < 0) {
-							
-							// 如果不能压缩，则放入slow-path
-							Message message = deserializeMessage(buffer[minPos], bufferPtr[minPos] * MESSAGE_SIZE);
-
-							//System.out.println("incompressible: " + dumpMessage(message));
-				    		haveIncompressibleRecord = true;
-				    		incompressibleRecords.add(message);
-						} else {
-							
-							// 同步 recordId
-							// 若压缩成功，输出当前记录到排序好的文件
-							while (true) {
-								if (!writeBuffer.hasRemaining()) {
-									sortedDataFile.write(writeBuffer.array());
-									writeBuffer.position(0);
-								}
-								
-								if (writeCount < recordId) {
-									
-									writeBuffer.put(dummyRecord);
-									writeCount++;
-								} else {
-									break;
-								}
-							}
-							
-							writeBuffer.put(buffer[minPos].array(), bufferPtr[minPos] * MESSAGE_SIZE, MESSAGE_SIZE);
-							writeCount++;
-						}
-						
-						bufferPtr[minPos]++;
-					}
-
-				}
-				
-				sortedDataFile.write(writeBuffer.array(), 0, writeBuffer.position());
-				
-				System.out.println("SORT COMPLETE!");
-				
-			} catch (Exception e) {
-				System.out.println("SORT ERROR!");
-				e.printStackTrace();
-				System.exit(-1);
+		try {
+			sortedDataFile = new RandomAccessFile(storagePath + "sorted.data", "rw");
+			sortedDataFile.setLength(0);
+			
+			byte dummyRecord[] = new byte[MESSAGE_SIZE];
+			
+			int inputPtr[] = new int[MAXTHREAD];
+			int bufferPtr[] = new int[MAXTHREAD];
+			int bufferCap[] = new int[MAXTHREAD];
+			ByteBuffer buffer[] = new ByteBuffer[MAXTHREAD];
+			
+			for (int i = 0; i < MAXTHREAD; i++) {
+				buffer[i] = ByteBuffer.allocate(MESSAGE_SIZE * MAX_MSGBUF);
 			}
+			
+			ByteBuffer writeBuffer = ByteBuffer.allocate(MESSAGE_SIZE * MAX_MSGBUF);
+			int writeCount = 0;
+			
+			
+			
+			int nThread = putThreadCount.get();
+			
+			while (true) {
+				
+				// 尝试补充数据
+				for (int i = 0; i < nThread; i++) {
+					if (bufferPtr[i] >= bufferCap[i]) {
+						PutThreadData cur = putThreadDataArray[i];
+						
+						// 计算文件中剩余记录数
+						int remainingCount = cur.outputPtr - inputPtr[i];
+						
+						if (remainingCount > 0) {
+							int readCnt = Math.min(remainingCount, MAX_MSGBUF);
+							cur.inputFile.readFully(buffer[i].array(), 0, readCnt * MESSAGE_SIZE);
+							bufferPtr[i] = 0;
+							bufferCap[i] = readCnt;
+							inputPtr[i] += readCnt;
+						}
+					}
+				}
+
+				long minValue = Long.MAX_VALUE;
+				int minPos = -1;
+				for (int i = 0; i < nThread; i++) {
+					if (bufferPtr[i] < bufferCap[i]) {
+						long curValue = buffer[i].getLong(bufferPtr[i] * MESSAGE_SIZE);
+						if (curValue <= minValue) {
+							minValue = curValue;
+							minPos = i;
+						}
+					}
+				}
+				
+				if (minPos == -1) {
+					break;
+				}
+				
+				// 登记当前记录到索引
+				long msgT = buffer[minPos].getLong(bufferPtr[minPos] * MESSAGE_SIZE + 0);
+				long msgA = buffer[minPos].getLong(bufferPtr[minPos] * MESSAGE_SIZE + 8);
+				
+				long recordId = doPutMessage(msgT, msgA);
+				if (recordId < 0) {
+					
+					// 如果不能压缩，则放入slow-path
+					Message message = deserializeMessage(buffer[minPos], bufferPtr[minPos] * MESSAGE_SIZE);
+
+					//System.out.println("incompressible: " + dumpMessage(message));
+		    		haveIncompressibleRecord = true;
+		    		incompressibleRecords.add(message);
+				} else {
+					
+					// 同步 recordId
+					// 若压缩成功，输出当前记录到排序好的文件
+					while (true) {
+						if (!writeBuffer.hasRemaining()) {
+							sortedDataFile.write(writeBuffer.array());
+							writeBuffer.position(0);
+						}
+						
+						if (writeCount < recordId) {
+							
+							writeBuffer.put(dummyRecord);
+							writeCount++;
+						} else {
+							break;
+						}
+					}
+					
+					writeBuffer.put(buffer[minPos].array(), bufferPtr[minPos] * MESSAGE_SIZE, MESSAGE_SIZE);
+					writeCount++;
+				}
+				
+				bufferPtr[minPos]++;
+
+			}
+			
+			sortedDataFile.write(writeBuffer.array(), 0, writeBuffer.position());
+			
+		} catch (Exception e) {
+			System.out.println("SORT ERROR!");
+			e.printStackTrace();
+			System.exit(-1);
 		}
-	}
-    private static MergeSortThread mergeSortThread;
+		
+		System.out.println("[" + new Date().toString() + "]: merge-sort completed!");
+    }
+    
     
     @Override
     public void put(Message message) {
@@ -516,8 +494,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		synchronized (stateLock) {
     			if (state == 0) {
 					System.out.println("[" + new Date() + "]: put() started");
-					mergeSortThread = new MergeSortThread();
-					mergeSortThread.start();
 					state = 1;
     			}
     		}
@@ -545,6 +521,30 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				System.exit(-1);
 			}
 		}
+    }
+    
+    private static void flushPutBuffer()
+    {
+    	try {
+	    	System.out.println("[" + new Date() + "]: flushing remaining buffers ...");
+			int totalMsg = 0;
+			int nThread = putThreadCount.get();
+			for (int i = 0; i < nThread; i++) {
+				PutThreadData td = putThreadDataArray[i];
+				int remainingCnt = td.buffer.position() / MESSAGE_SIZE;
+				if (remainingCnt > 0) {
+					td.outputFile.write(td.buffer.array(), 0, td.buffer.position());
+					td.outputPtr += remainingCnt;
+				}
+				totalMsg += td.outputPtr;
+				System.out.println(String.format("thread %d: %d", i, td.outputPtr));
+			}
+			System.out.println(String.format("total: %d", totalMsg));
+    	} catch (IOException e) {
+    		System.out.println("FLUSH PUT BUFFER ERROR!");
+    		e.printStackTrace();
+    		System.exit(-1);
+    	}
     }
 
     private static void updateIndexHeap()
@@ -592,26 +592,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static void createIndex()
     {
 		try {
-			System.out.println("[" + new Date() + "]: flushing remaining buffers ...");
-			int totalMsg = 0;
-			int nThread = lastReadyPutThreadId.get();
-			for (int i = 0; i < nThread; i++) {
-				PutThreadData td = putThreadDataArray[i];
-				int remainingCnt = td.buffer.position() / MESSAGE_SIZE;
-				if (remainingCnt > 0) {
-					td.outputFile.write(td.buffer.array(), 0, td.buffer.position());
-					td.outputPtr += remainingCnt;
-				}
-				totalMsg += td.outputPtr;
-				System.out.println(String.format("thread %d: %d", i, td.outputPtr));
-			}
-			System.out.println(String.format("total: %d", totalMsg));
 			
-			System.out.println("[" + new Date() + "]: waiting merge-sort thread ...");
-			putFinishedFlag = true;
-			mergeSortThread.join();
+			flushPutBuffer();
+			externalMergeSort();
 			
-			System.out.println("[" + new Date() + "]: merge-sort finished.");
 		} catch (Exception e) {
 			e.printStackTrace();
 			System.exit(-1);
@@ -850,7 +834,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	avgQueryCost.addAndGet(System.nanoTime() - st);
     	
-    	if (qId >= 30000 - 1) {
+    	if (qId >= 30652 - 1) {
     		long avgQueryEndTime = System.nanoTime();
     		
     		System.out.println("====== SUMMARY ======\n" + new Date().toString());
