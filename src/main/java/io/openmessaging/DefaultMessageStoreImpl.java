@@ -181,9 +181,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int I_TBASE = 7;
     
     
-    private static final int L_NREC = 128; // n-record in one block
+    private static final int L_NREC = 256; // n-record in one block
     
-    private static final int H = 24; // max height of HEAP
+    private static final int H = 23; // max height of HEAP
     private static final int HEAP_SIZE = ((1 << (H + 1)) + 1);
     private static final int HEAP_LEAF_BASE = 1 << H;
     private static final int HEAP_NINT = HEAP_SIZE * I_SIZE;
