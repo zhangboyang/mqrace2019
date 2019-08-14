@@ -556,6 +556,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	if (nLeaf % L_NREC != 0) {
     		updateLeafIndex(nBlock);
     		nBlock++;
+    	} else {
+    		updateLeafIndex(nBlock - 1);
     	}
     	
     	for (int j = H - 1; j >= 0; j--) {
