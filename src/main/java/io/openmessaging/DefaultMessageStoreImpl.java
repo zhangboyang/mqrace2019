@@ -25,6 +25,13 @@ import sun.nio.ch.FileChannelImpl;
  */
 public class DefaultMessageStoreImpl extends MessageStore {
 
+	private static String getJVMHeapInfo()
+	{
+		return String.format("free=%.0fM/total=%.0fM/max=%.0fM", 
+			Runtime.getRuntime().freeMemory() * 1e-6,
+			Runtime.getRuntime().totalMemory() * 1e-6,
+			Runtime.getRuntime().maxMemory() * 1e-6);
+	}
 	private static void printFile(String path)
 	{
 		System.out.println(String.format("======== %s ========", path)); 
@@ -38,7 +45,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	
 	static {
     	//printFile("/proc/cpuinfo");
+		System.out.println(getJVMHeapInfo());
     	printFile("/proc/meminfo");
+    	System.exit(-1);
 	}
 	
 	private static String dumpMessage(Message message)
@@ -172,9 +181,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int I_TBASE = 7;
     
     
-    private static final int L_NREC = 256; // n-record in one block
+    private static final int L_NREC = 128; // n-record in one block
     
-    private static final int H = 23; // max height of HEAP
+    private static final int H = 24; // max height of HEAP
     private static final int HEAP_SIZE = ((1 << (H + 1)) + 1);
     private static final int HEAP_LEAF_BASE = 1 << H;
     private static final int HEAP_NINT = HEAP_SIZE * I_SIZE;
@@ -305,7 +314,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	// 写入存储区
     	long memOffset = recordId * 3L;
     	if (recordId % 1000000 == 0) {
-    		System.out.println(String.format("[%s]: realRecordId=%d recordId=%d unfullBlocks=%d", new Date().toString(), realRecordId, recordId, unfullBlocks));
+    		System.out.println(String.format("[%s]: realRecordId=%d recordId=%d unfullBlocks=%d | %s", new Date().toString(), realRecordId, recordId, unfullBlocks, getJVMHeapInfo()));
     	}
     	if (memOffset + 4 > MEMSZ) {
     		System.out.println("ERROR: MEMORY FULL!");
