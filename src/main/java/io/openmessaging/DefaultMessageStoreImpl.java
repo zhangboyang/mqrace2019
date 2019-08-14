@@ -45,6 +45,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	
 	static {
     	//printFile("/proc/cpuinfo");
+		System.gc();
 		System.out.println(getJVMHeapInfo());
     	printFile("/proc/meminfo");
     	System.exit(-1);
