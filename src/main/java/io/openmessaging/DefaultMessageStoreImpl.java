@@ -734,11 +734,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	
     	// 为最后的查询平均值预热JVM
-    	avgWarmUpQueryCount.incrementAndGet();
+//    	avgWarmUpQueryCount.incrementAndGet();
     	getAvgValue(aMin, aMax, tMin, tMax);
     	if (firstFlag) {
     		for (int i = 0; i < 50000; i++) {
-    			avgWarmUpQueryCount.incrementAndGet();
+//    			avgWarmUpQueryCount.incrementAndGet();
     			getAvgValue(aMin, aMax, tMin, tMax);
     		}
     	}
@@ -748,25 +748,25 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
 
     
-    private static final AtomicInteger nextAvgThreadId = new AtomicInteger(0);
-    private static final ThreadLocal<Integer> avgThreadId =
-        new ThreadLocal<Integer>() {
-            @Override protected Integer initialValue() {
-                return nextAvgThreadId.getAndIncrement();
-        }
-    };
-    private static final AtomicInteger avgWarmUpQueryCount = new AtomicInteger(0);
-    private static final AtomicInteger avgFinishedQueryCount = new AtomicInteger(0);
-    private static final AtomicLong avgQueryCost = new AtomicLong(0);
-    private static final AtomicInteger avgQueryLeafCount = new AtomicInteger(0);
-    private static final AtomicLong avgQueryLeafCost = new AtomicLong(0);
-    private static final AtomicLong avgQueryStartTime = new AtomicLong(0);
+//    private static final AtomicInteger nextAvgThreadId = new AtomicInteger(0);
+//    private static final ThreadLocal<Integer> avgThreadId =
+//        new ThreadLocal<Integer>() {
+//            @Override protected Integer initialValue() {
+//                return nextAvgThreadId.getAndIncrement();
+//        }
+//    };
+//    private static final AtomicInteger avgWarmUpQueryCount = new AtomicInteger(0);
+//    private static final AtomicInteger avgFinishedQueryCount = new AtomicInteger(0);
+//    private static final AtomicLong avgQueryCost = new AtomicLong(0);
+//    private static final AtomicInteger avgQueryLeafCount = new AtomicInteger(0);
+//    private static final AtomicLong avgQueryLeafCost = new AtomicLong(0);
+//    private static final AtomicLong avgQueryStartTime = new AtomicLong(0);
     
     
     
     
     private static final AtomicInteger avgQueryId = new AtomicInteger(0); 
-    private static final int MAXQUERY = 400000;
+    private static final int MAXQUERY = 200000;
     private static final int ARRAYPAD = 16; // avoid false sharing
     private static final int avgResultCount[] = new int[MAXQUERY * ARRAYPAD];
 
@@ -776,7 +776,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	if (cur >= HEAP_LEAF_BASE) {
     		
-    		long st = System.nanoTime();
+//    		long st = System.nanoTime();
     		
     		int tBase = indexHeap(cur * I_SIZE + I_TBASE);
     		
@@ -822,9 +822,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		avgResultCount[counterId] += cnt;
     		
     		
-    		avgQueryLeafCost.addAndGet(System.nanoTime() - st);
-    		avgQueryLeafCount.incrementAndGet();
-    		avgResultCount[counterId + 1]++;
+//    		avgQueryLeafCost.addAndGet(System.nanoTime() - st);
+//    		avgQueryLeafCount.incrementAndGet();
+//    		avgResultCount[counterId + 1]++;
     		
     		return sum + cnt * ((long)tBase - MessageCompressor.AOFFSET);
     	}
@@ -873,16 +873,16 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	int qId = avgQueryId.getAndIncrement();
     	
-    	if (qId == avgWarmUpQueryCount.get()) {
-    		System.out.println("REAL QUERY START!");
-    		
-    		// 有并发问题，但不会差太多
-    		avgQueryStartTime.set(System.nanoTime());
-    	    avgQueryCost.set(0); 
-    	    avgQueryLeafCount.set(0);
-    	    avgQueryLeafCost.set(0);
-    	}
-    	long st = System.nanoTime();
+//    	if (qId == avgWarmUpQueryCount.get()) {
+//    		System.out.println("REAL QUERY START!");
+//    		
+//    		// 有并发问题，但不会差太多
+//    		avgQueryStartTime.set(System.nanoTime());
+//    	    avgQueryCost.set(0); 
+//    	    avgQueryLeafCount.set(0);
+//    	    avgQueryLeafCost.set(0);
+//    	}
+//    	long st = System.nanoTime();
     	
     	
     	
@@ -899,19 +899,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	
     	
-    	long curCost = System.nanoTime() - st;
-    	avgQueryCost.addAndGet(curCost);
-    	if (qId >= avgWarmUpQueryCount.get()) {
-    		System.out.println(String.format("qId=%d Thread=%d Start=%d Time=%d ResultCnt=%d Leaf=%d tMin=%d tMax=%d aMin=%d aMax=%d", qId, avgThreadId.get(), st, curCost, avgResultCount[qId * ARRAYPAD], avgResultCount[qId * ARRAYPAD + 1], tMin, tMax, aMin, aMax));
-    	}
-    	if (avgFinishedQueryCount.incrementAndGet() >= avgWarmUpQueryCount.get() + 30652) {
-    		long avgQueryEndTime = System.nanoTime();
-    		int avgRealQueryCount = avgFinishedQueryCount.get() - avgWarmUpQueryCount.get();
-    		System.out.println("====== SUMMARY ======\n" + new Date().toString());
-    		System.out.println(String.format("total query time: %.4f", (avgQueryEndTime - avgQueryStartTime.get()) * 1e-6));
-    		System.out.println(String.format("cost : leaf %.1f query %.1f (%.4f)", avgQueryLeafCost.get() * 1e-6, avgQueryCost.get() * 1e-6, (double)avgQueryLeafCost.get() / avgQueryCost.get()));
-    		System.out.println(String.format("count: leaf %d query %d (%.4f)", avgQueryLeafCount.get(), avgRealQueryCount, (double)avgQueryLeafCount.get() / avgRealQueryCount));
-    	}
+//    	long curCost = System.nanoTime() - st;
+//    	avgQueryCost.addAndGet(curCost);
+//    	if (qId >= avgWarmUpQueryCount.get()) {
+//    		System.out.println(String.format("qId=%d Thread=%d Start=%d Time=%d ResultCnt=%d Leaf=%d tMin=%d tMax=%d aMin=%d aMax=%d", qId, avgThreadId.get(), st, curCost, avgResultCount[qId * ARRAYPAD], avgResultCount[qId * ARRAYPAD + 1], tMin, tMax, aMin, aMax));
+//    	}
+//    	if (avgFinishedQueryCount.incrementAndGet() >= avgWarmUpQueryCount.get() + 30652) {
+//    		long avgQueryEndTime = System.nanoTime();
+//    		int avgRealQueryCount = avgFinishedQueryCount.get() - avgWarmUpQueryCount.get();
+//    		System.out.println("====== SUMMARY ======\n" + new Date().toString());
+//    		System.out.println(String.format("total query time: %.4f", (avgQueryEndTime - avgQueryStartTime.get()) * 1e-6));
+//    		System.out.println(String.format("cost : leaf %.1f query %.1f (%.4f)", avgQueryLeafCost.get() * 1e-6, avgQueryCost.get() * 1e-6, (double)avgQueryLeafCost.get() / avgQueryCost.get()));
+//    		System.out.println(String.format("count: leaf %d query %d (%.4f)", avgQueryLeafCount.get(), avgRealQueryCount, (double)avgQueryLeafCount.get() / avgRealQueryCount));
+//    	}
 
     	return cnt == 0 ? 0 : sum / cnt;
     }
