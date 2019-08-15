@@ -1,16 +1,23 @@
 package io.openmessaging;
 
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import sun.misc.Unsafe;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import sun.nio.ch.FileChannelImpl;
 
 /**
  * 这是一个简单的基于内存的实现，以方便选手理解题意；
@@ -18,13 +25,6 @@ import java.lang.reflect.Field;
  */
 public class DefaultMessageStoreImpl extends MessageStore {
 
-	private static String getJVMHeapInfo()
-	{
-		return String.format("free=%.0fM/total=%.0fM/max=%.0fM", 
-			Runtime.getRuntime().freeMemory() * 1e-6,
-			Runtime.getRuntime().totalMemory() * 1e-6,
-			Runtime.getRuntime().maxMemory() * 1e-6);
-	}
 	private static void printFile(String path)
 	{
 		System.out.println(String.format("======== %s ========", path)); 
@@ -38,8 +38,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	
 	static {
     	//printFile("/proc/cpuinfo");
-		System.gc();
-		System.out.println(getJVMHeapInfo());
     	printFile("/proc/meminfo");
 	}
 	
@@ -148,10 +146,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
         unsafe = theUnsafe;
     }
     
-//    private static final String storagePath = "./";
+    //private static final String storagePath = "./";
     private static final String storagePath = "/alidata1/race2019/data/";
     
-//    private static final long MEMSZ = 30000000L * 3;
+    //private static final long MEMSZ = 30000000L * 3;
     private static final long MEMSZ = 2100000000L * 3;
     private static final long memBase;
     
@@ -307,7 +305,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	// 写入存储区
     	long memOffset = recordId * 3L;
     	if (recordId % 1000000 == 0) {
-    		System.out.println(String.format("[%s]: realRecordId=%d recordId=%d unfullBlocks=%d | %s", new Date().toString(), realRecordId, recordId, unfullBlocks, getJVMHeapInfo()));
+    		System.out.println(String.format("[%s]: realRecordId=%d recordId=%d unfullBlocks=%d", new Date().toString(), realRecordId, recordId, unfullBlocks));
     	}
     	if (memOffset + 4 > MEMSZ) {
     		System.out.println("ERROR: MEMORY FULL!");
@@ -346,7 +344,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	RandomAccessFile inputFile;
     }
-    private static final AtomicLong putCount = new AtomicLong(0);
     
     private static final PutThreadData putThreadDataArray[] = new PutThreadData[MAXTHREAD];
     private static final AtomicInteger putThreadCount = new AtomicInteger(0);
@@ -390,8 +387,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			
 			byte dummyRecord[] = new byte[MESSAGE_SIZE];
 			
-			long arrayFront[] = new long[MAXTHREAD];
-			
 			int inputPtr[] = new int[MAXTHREAD];
 			int bufferPtr[] = new int[MAXTHREAD];
 			int bufferCap[] = new int[MAXTHREAD];
@@ -404,16 +399,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			ByteBuffer writeBuffer = ByteBuffer.allocate(MESSAGE_SIZE * MAX_MSGBUF);
 			int writeCount = 0;
 			
+			
+			
 			int nThread = putThreadCount.get();
 			
-			
 			while (true) {
-
-				long minValue = Long.MAX_VALUE;
-				int minPos = -1;
+				
+				// 尝试补充数据
 				for (int i = 0; i < nThread; i++) {
-					
-					// 如果缓冲区空，尝试补充数据
 					if (bufferPtr[i] >= bufferCap[i]) {
 						PutThreadData cur = putThreadDataArray[i];
 						
@@ -426,13 +419,15 @@ public class DefaultMessageStoreImpl extends MessageStore {
 							bufferPtr[i] = 0;
 							bufferCap[i] = readCnt;
 							inputPtr[i] += readCnt;
-							arrayFront[i] = buffer[i].getLong(0);
 						}
 					}
-					
-					// 比小
+				}
+
+				long minValue = Long.MAX_VALUE;
+				int minPos = -1;
+				for (int i = 0; i < nThread; i++) {
 					if (bufferPtr[i] < bufferCap[i]) {
-						long curValue = arrayFront[i];
+						long curValue = buffer[i].getLong(bufferPtr[i] * MESSAGE_SIZE);
 						if (curValue <= minValue) {
 							minValue = curValue;
 							minPos = i;
@@ -481,9 +476,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				}
 				
 				bufferPtr[minPos]++;
-				if (bufferPtr[minPos] < bufferCap[minPos]) {
-					arrayFront[minPos] = buffer[minPos].getLong(bufferPtr[minPos] * MESSAGE_SIZE);
-				}
+
 			}
 			
 			sortedDataFile.write(writeBuffer.array(), 0, writeBuffer.position());
@@ -494,7 +487,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
 		
-		Arrays.fill(putThreadDataArray, null);
 		System.out.println("[" + new Date().toString() + "]: merge-sort completed!");
     }
     
@@ -526,17 +518,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			try {
 				td.outputFile.write(buffer.array());
 				buffer.position(0);
-				td.outputPtr += MAX_MSGBUF;
-
+				td.outputPtr += MAX_MSGBUF; 
 			} catch (IOException e) {
 				System.out.println("ERROR WRITING MESSAGE!");
 				e.printStackTrace();
 				System.exit(-1);
 			}
-		}
-		
-		if (putCount.incrementAndGet() % (MAX_MSGBUF * MAXTHREAD) == 0) {
-			System.gc();
 		}
     }
     
@@ -563,7 +550,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		System.exit(-1);
     	}
     }
-    
+
     private static void updateIndexHeap()
     {
     	
@@ -610,10 +597,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     {
 		try {
 			
-			System.gc();
 			flushPutBuffer();
 			externalMergeSort();
-			System.gc();
 			
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -625,8 +610,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		System.out.println("unfullBlocks: " + unfullBlocks);
 		System.out.println("incompressibleRecords: " + incompressibleRecords.size());
 		
-		System.gc();
-		System.out.println(getJVMHeapInfo());
 		printFile("/proc/meminfo");
     }
     
@@ -693,77 +676,66 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		}
     }
     
-    private static final Object getMessageLock = new Object();
     @Override
-    public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
+    public synchronized List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
 
     	boolean firstFlag = false;
-    	ArrayList<Message> result;
     	
-    	synchronized (getMessageLock) {
-	    	
-	    	
-	    	if (state == 1) {
-	    		System.out.println("[" + new Date() + "]: getMessage() started");
-	    		createIndex();
-				state = 2;
-				firstFlag = true;
-	    	}
-	    	
-	    	System.gc();
-	    	
-	    	result = new ArrayList<Message>();
-	    	
-	    	doGetMessage(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
-	
-	    	if (haveIncompressibleRecord) {
-	    		for (Message msg: incompressibleRecords) {
-	    			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
-						result.add(msg);
-					}
-	    		}
-	    		doSortMessage(result);
-	    	}
+    	if (state == 1) {
+    		System.out.println("[" + new Date() + "]: getMessage() started");
+    		createIndex();
+			state = 2;
+			firstFlag = true;
+    	}
+    	
+    	System.gc();
+    	
+    	ArrayList<Message> result = new ArrayList<Message>();
+    	
+    	doGetMessage(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
+
+    	if (haveIncompressibleRecord) {
+    		//for (Message msg: result) {
+    		//	System.out.println(msg.getT());
+    		//}
+    		//System.out.println(String.format("%d %d %d %d", aMin, aMax, tMin, tMax));
+    		for (Message msg: incompressibleRecords) {
+    			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
+					result.add(msg);
+					//System.out.println("put: " + msg.getT());
+				}
+    		}
+    		
+    		doSortMessage(result);
+    		
+    		
     	}
     	
     	// 为最后的查询平均值预热JVM
-//    	avgWarmUpQueryCount.incrementAndGet();
+//    	avgQueryCount.set(-1);
     	getAvgValue(aMin, aMax, tMin, tMax);
     	if (firstFlag) {
-    		for (int i = 0; i < 50000; i++) {
-//    			avgWarmUpQueryCount.incrementAndGet();
+    		for (int i = 0; i < 30000; i++) {
+//    			avgQueryCount.set(-1);
     			getAvgValue(aMin, aMax, tMin, tMax);
     		}
     	}
-		
 
     	return result;
     }
 
+
     
-//    private static final AtomicInteger nextAvgThreadId = new AtomicInteger(0);
-//    private static final ThreadLocal<Integer> avgThreadId =
-//        new ThreadLocal<Integer>() {
-//            @Override protected Integer initialValue() {
-//                return nextAvgThreadId.getAndIncrement();
-//        }
-//    };
-//    private static final AtomicInteger avgWarmUpQueryCount = new AtomicInteger(0);
-//    private static final AtomicInteger avgFinishedQueryCount = new AtomicInteger(0);
+    private static class AvgResult {
+    	long sum;
+    	int cnt;
+    }
+    
+//    private static final AtomicInteger avgQueryCount = new AtomicInteger(0); 
 //    private static final AtomicLong avgQueryCost = new AtomicLong(0);
 //    private static final AtomicInteger avgQueryLeafCount = new AtomicInteger(0);
 //    private static final AtomicLong avgQueryLeafCost = new AtomicLong(0);
 //    private static final AtomicLong avgQueryStartTime = new AtomicLong(0);
-    
-    
-    
-    
-//    private static final AtomicInteger avgQueryId = new AtomicInteger(0); 
-
-    private static class AvgResult {
-    	public long sum;
-    	public int cnt;
-    }
     
     private static void doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
     {
@@ -816,9 +788,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		result.sum += sum + cnt * ((long)tBase - MessageCompressor.AOFFSET);
     		result.cnt += cnt;
     		
+    		
 //    		avgQueryLeafCost.addAndGet(System.nanoTime() - st);
 //    		avgQueryLeafCount.incrementAndGet();
-//    		avgResultCount[counterId + 1]++;
     		
     		return;
     	}
@@ -854,56 +826,44 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				doGetAvgValue(result, rch, aMin, aMax, tMin, tMax);
 			}
 		}
-		
     }
     
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
     	
-//    	int qId = avgQueryId.getAndIncrement();
-    	
-//    	if (qId == avgWarmUpQueryCount.get()) {
-//    		System.out.println("REAL QUERY START!");
-//    		
-//    		// 有并发问题，但不会差太多
+//    	int qId = avgQueryCount.getAndIncrement();
+//    	if (qId == 0) {
 //    		avgQueryStartTime.set(System.nanoTime());
 //    	    avgQueryCost.set(0); 
-//    	    avgQueryLeafCount.set(0);
+//    	    avgQueryLeafCount.set(0); 
 //    	    avgQueryLeafCost.set(0);
 //    	}
 //    	long st = System.nanoTime();
     	
-    	
     	AvgResult result = new AvgResult();
     	doGetAvgValue(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
-    	long sum = result.sum;
-    	int cnt = result.cnt;
+    	
     	if (haveIncompressibleRecord) {
     		for (Message msg: incompressibleRecords) {
     			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
-					sum += msg.getA();
-					cnt++;
+					result.sum += msg.getA();
+					result.cnt++;
 				}
     		}
     	}
     	
-    	
-    	
-//    	long curCost = System.nanoTime() - st;
-//    	avgQueryCost.addAndGet(curCost);
-//    	if (qId >= avgWarmUpQueryCount.get()) {
-//    		System.out.println(String.format("qId=%d Thread=%d Start=%d Time=%d ResultCnt=%d Leaf=%d tMin=%d tMax=%d aMin=%d aMax=%d", qId, avgThreadId.get(), st, curCost, avgResultCount[qId * ARRAYPAD], avgResultCount[qId * ARRAYPAD + 1], tMin, tMax, aMin, aMax));
-//    	}
-//    	if (avgFinishedQueryCount.incrementAndGet() >= avgWarmUpQueryCount.get() + 30652) {
+//    	avgQueryCost.addAndGet(System.nanoTime() - st);
+//    	
+//    	if (qId >= 30652 - 1) {
 //    		long avgQueryEndTime = System.nanoTime();
-//    		int avgRealQueryCount = avgFinishedQueryCount.get() - avgWarmUpQueryCount.get();
+//    		
 //    		System.out.println("====== SUMMARY ======\n" + new Date().toString());
 //    		System.out.println(String.format("total query time: %.4f", (avgQueryEndTime - avgQueryStartTime.get()) * 1e-6));
 //    		System.out.println(String.format("cost : leaf %.1f query %.1f (%.4f)", avgQueryLeafCost.get() * 1e-6, avgQueryCost.get() * 1e-6, (double)avgQueryLeafCost.get() / avgQueryCost.get()));
-//    		System.out.println(String.format("count: leaf %d query %d (%.4f)", avgQueryLeafCount.get(), avgRealQueryCount, (double)avgQueryLeafCount.get() / avgRealQueryCount));
+//    		System.out.println(String.format("count: leaf %d query %d (%.4f)", avgQueryLeafCount.get(), avgQueryCount.get(), (double)avgQueryLeafCount.get() / avgQueryCount.get()));
 //    	}
-
-    	return cnt == 0 ? 0 : sum / cnt;
+    	
+    	return result.cnt == 0 ? 0 : result.sum / result.cnt;
     }
 
 }
