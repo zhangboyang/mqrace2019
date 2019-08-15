@@ -146,10 +146,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
         unsafe = theUnsafe;
     }
     
-    //private static final String storagePath = "./";
+//    private static final String storagePath = "./";
     private static final String storagePath = "/alidata1/race2019/data/";
     
-    //private static final long MEMSZ = 30000000L * 3;
+//    private static final long MEMSZ = 30000000L * 3;
     private static final long MEMSZ = 2100000000L * 3;
     private static final long memBase;
     
@@ -676,39 +676,43 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		}
     }
     
+    private static final Object getMessageLock = new Object(); 
     @Override
-    public synchronized List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
+    public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
 
     	boolean firstFlag = false;
+    	ArrayList<Message> result;
     	
-    	if (state == 1) {
-    		System.out.println("[" + new Date() + "]: getMessage() started");
-    		createIndex();
-			state = 2;
-			firstFlag = true;
-    	}
-    	
-    	System.gc();
-    	
-    	ArrayList<Message> result = new ArrayList<Message>();
-    	
-    	doGetMessage(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
-
-    	if (haveIncompressibleRecord) {
-    		//for (Message msg: result) {
-    		//	System.out.println(msg.getT());
-    		//}
-    		//System.out.println(String.format("%d %d %d %d", aMin, aMax, tMin, tMax));
-    		for (Message msg: incompressibleRecords) {
-    			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
-					result.add(msg);
-					//System.out.println("put: " + msg.getT());
-				}
-    		}
-    		
-    		doSortMessage(result);
-    		
-    		
+    	synchronized (getMessageLock) {
+	    	if (state == 1) {
+	    		System.out.println("[" + new Date() + "]: getMessage() started");
+	    		createIndex();
+				state = 2;
+				firstFlag = true;
+	    	}
+	    	
+	    	System.gc();
+	    	
+	    	result = new ArrayList<Message>();
+	    	
+	    	doGetMessage(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
+	
+	    	if (haveIncompressibleRecord) {
+	    		//for (Message msg: result) {
+	    		//	System.out.println(msg.getT());
+	    		//}
+	    		//System.out.println(String.format("%d %d %d %d", aMin, aMax, tMin, tMax));
+	    		for (Message msg: incompressibleRecords) {
+	    			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
+						result.add(msg);
+						//System.out.println("put: " + msg.getT());
+					}
+	    		}
+	    		
+	    		doSortMessage(result);
+	    		
+	    		
+	    	}
     	}
     	
     	// 为最后的查询平均值预热JVM
