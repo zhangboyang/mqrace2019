@@ -765,13 +765,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
-    private static final AtomicInteger avgQueryId = new AtomicInteger(0); 
-    private static final int MAXQUERY = 200000;
-    private static final int ARRAYPAD = 16; // avoid false sharing
-    private static final int avgResultCount[] = new int[MAXQUERY * ARRAYPAD];
+//    private static final AtomicInteger avgQueryId = new AtomicInteger(0); 
 
+    private static class AvgResult {
+    	public int cnt;
+    }
     
-    private static long doGetAvgValue(int counterId, int cur, int aMin, int aMax, int tMin, int tMax)
+    private static long doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
@@ -819,7 +819,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				}
     		}
     		
-    		avgResultCount[counterId] += cnt;
+    		result.cnt += cnt;
     		
     		
 //    		avgQueryLeafCost.addAndGet(System.nanoTime() - st);
@@ -851,7 +851,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				sum += indexHeapL(lch_base + I_SUML);
 				cnt += indexHeap(lch_base + I_CNT );
 			} else {
-				sum += doGetAvgValue(counterId, lch, aMin, aMax, tMin, tMax);
+				sum += doGetAvgValue(result, lch, aMin, aMax, tMin, tMax);
 			}
 		}
 		
@@ -860,18 +860,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				sum += indexHeapL(rch_base + I_SUML);
 				cnt += indexHeap(rch_base + I_CNT );
 			} else {
-				sum += doGetAvgValue(counterId, rch, aMin, aMax, tMin, tMax);
+				sum += doGetAvgValue(result, rch, aMin, aMax, tMin, tMax);
 			}
 		}
 		
-		avgResultCount[counterId] += cnt;
+		result.cnt += cnt;
 		return sum;
     }
     
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
     	
-    	int qId = avgQueryId.getAndIncrement();
+//    	int qId = avgQueryId.getAndIncrement();
     	
 //    	if (qId == avgWarmUpQueryCount.get()) {
 //    		System.out.println("REAL QUERY START!");
@@ -885,9 +885,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    	long st = System.nanoTime();
     	
     	
-    	
-    	long sum = doGetAvgValue(qId * ARRAYPAD, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
-    	int cnt = avgResultCount[qId * ARRAYPAD];
+    	AvgResult result = new AvgResult();
+    	long sum = doGetAvgValue(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
+    	int cnt = result.cnt;
     	if (haveIncompressibleRecord) {
     		for (Message msg: incompressibleRecords) {
     			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
