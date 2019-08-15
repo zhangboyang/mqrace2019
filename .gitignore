@@ -4,3 +4,4 @@
 .settings
 storage.dat
 *.data
+*.log

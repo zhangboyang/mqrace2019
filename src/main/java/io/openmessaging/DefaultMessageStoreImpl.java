@@ -155,11 +155,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
         unsafe = theUnsafe;
     }
     
-    //private static final String storagePath = "./";
-    private static final String storagePath = "/alidata1/race2019/data/";
+    private static final String storagePath = "./";
+    //private static final String storagePath = "/alidata1/race2019/data/";
     
-    //private static final long MEMSZ = 30000000L * 3;
-    private static final long MEMSZ = 2100000000L * 3;
+    private static final long MEMSZ = 30000000L * 3;
+    //private static final long MEMSZ = 2100000000L * 3;
     private static final long memBase;
     
     static {
@@ -571,6 +571,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     }
 
+    private static int heapMinT;
+    private static int heapMaxT;
+    private static int heapMinA;
+    private static int heapMaxA;
+    
     private static void updateIndexHeap()
     {
     	
@@ -608,6 +613,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		}
     	}
     	
+    	heapMinT = indexHeap(I_SIZE * 1 + I_MINT);
+    	heapMaxT = indexHeap(I_SIZE * 1 + I_MAXT);
+    	heapMinA = indexHeap(I_SIZE * 1 + I_MINA);
+    	heapMaxA = indexHeap(I_SIZE * 1 + I_MAXA);
+    	
     	System.out.println("nLeaf : " + nLeaf);
     	System.out.println("nBlock: " + nBlock);
     }
@@ -631,6 +641,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		updateIndexHeap();
 		System.out.println("unfullBlocks: " + unfullBlocks);
 		System.out.println("incompressibleRecords: " + incompressibleRecords.size());
+		
+		System.out.println("heapMinT: " + heapMinT);
+		System.out.println("heapMaxT: " + heapMaxT);
+		System.out.println("heapMinA: " + heapMinA);
+		System.out.println("heapMaxA: " + heapMaxA);
 		
 		System.gc();
 		System.out.println(getJVMHeapInfo());
@@ -700,68 +715,97 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		}
     }
     
+    static volatile long tttt = 0;
+    
+    private static final Object getMessageLock = new Object();
     @Override
-    public synchronized List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
+    public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
 
     	boolean firstFlag = false;
+    	ArrayList<Message> result;
     	
-    	if (state == 1) {
-    		System.out.println("[" + new Date() + "]: getMessage() started");
-    		createIndex();
-			state = 2;
-			firstFlag = true;
-    	}
-    	
-    	System.gc();
-    	
-    	ArrayList<Message> result = new ArrayList<Message>();
-    	
-    	doGetMessage(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
-
-    	if (haveIncompressibleRecord) {
-    		//for (Message msg: result) {
-    		//	System.out.println(msg.getT());
-    		//}
-    		//System.out.println(String.format("%d %d %d %d", aMin, aMax, tMin, tMax));
-    		for (Message msg: incompressibleRecords) {
-    			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
-					result.add(msg);
-					//System.out.println("put: " + msg.getT());
-				}
-    		}
-    		
-    		doSortMessage(result);
-    		
-    		
+    	synchronized (getMessageLock) {
+	    	
+	    	
+	    	if (state == 1) {
+	    		System.out.println("[" + new Date() + "]: getMessage() started");
+	    		createIndex();
+				state = 2;
+				firstFlag = true;
+	    	}
+	    	
+	    	System.gc();
+	    	
+	    	result = new ArrayList<Message>();
+	    	
+	    	doGetMessage(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
+	
+	    	if (haveIncompressibleRecord) {
+	    		for (Message msg: incompressibleRecords) {
+	    			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
+						result.add(msg);
+					}
+	    		}
+	    		doSortMessage(result);
+	    	}
     	}
     	
     	// 为最后的查询平均值预热JVM
-    	avgQueryCount.set(-1);
-    	getAvgValue(aMin, aMax, tMin, tMax);
+    	/*avgQueryId.set(0);
+    	avgFinishedQueryCount.set(0);
+    	avgResultCount[0] = 0;*/
+    	tttt += getAvgValue(aMin, aMax, tMin, tMax);
     	if (firstFlag) {
     		for (int i = 0; i < 30000; i++) {
-    			avgQueryCount.set(-1);
-    			getAvgValue(aMin, aMax, tMin, tMax);
+    			/*avgQueryId.set(0);
+    			avgFinishedQueryCount.set(0);
+    			avgResultCount[0] = 0;*/
+    			
+    			/*int qMinT = ThreadLocalRandom.current().nextInt(heapMinT, heapMaxT + 1);
+    			int qMaxT = qMinT + ThreadLocalRandom.current().nextInt(10000);
+    			
+    			int qMinA = qMinT - ThreadLocalRandom.current().nextInt(0, 10000);
+    			int qMaxA = qMaxT + ThreadLocalRandom.current().nextInt(0, 10000);
+    			
+    			tttt += getAvgValue(qMinA, qMaxA, qMinT, qMaxT);*/
+    			tttt += getAvgValue(aMin, aMax, tMin, tMax);
     		}
     	}
+		/*avgQueryId.set(0);
+		nextAvgThreadId.set(0);
+		avgFinishedQueryCount.set(0);
+		avgResultCount[0] = 0;
+		avgResultCount[1] = 0;*/
 
     	return result;
     }
 
-
     
-    private static class AvgResult {
-    	long sum;
-    	int cnt;
-    }
-    
-    private static final AtomicInteger avgQueryCount = new AtomicInteger(0); 
+    private static final AtomicInteger nextAvgThreadId = new AtomicInteger(0);
+    private static final ThreadLocal<Integer> avgThreadId =
+        new ThreadLocal<Integer>() {
+            @Override protected Integer initialValue() {
+                return nextAvgThreadId.getAndIncrement();
+        }
+    };
+    private static final AtomicInteger avgFinishedQueryCount = new AtomicInteger(0);
     private static final AtomicLong avgQueryCost = new AtomicLong(0);
     private static final AtomicInteger avgQueryLeafCount = new AtomicInteger(0);
     private static final AtomicLong avgQueryLeafCost = new AtomicLong(0);
     private static final AtomicLong avgQueryStartTime = new AtomicLong(0);
     
-    private static void doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
+    
+    
+    private static final AtomicInteger avgQueryId = new AtomicInteger(0); 
+    private static final int MAXQUERY = 400000;
+    private static final int ARRAYPAD = 16; // avoid false sharing
+    private static final int avgResultCount[] = new int[MAXQUERY * ARRAYPAD];
+    
+    
+
+    
+    
+    private static long doGetAvgValue(int counterId, int cur, int aMin, int aMax, int tMin, int tMax)
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
@@ -809,15 +853,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				}
     		}
     		
-    		result.sum += sum + cnt * ((long)tBase - MessageCompressor.AOFFSET);
-    		result.cnt += cnt;
+    		avgResultCount[counterId] += cnt;
     		
     		
     		avgQueryLeafCost.addAndGet(System.nanoTime() - st);
     		avgQueryLeafCount.incrementAndGet();
+    		avgResultCount[counterId + 1]++;
     		
-    		return;
+    		return sum + cnt * ((long)tBase - MessageCompressor.AOFFSET);
     	}
+    	
+    	long sum = 0;
+    	int cnt = 0;
     	
     	int lch = cur * 2;
     	int lch_base = I_SIZE * lch;
@@ -835,27 +882,33 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		if (rectOverlap(lch_minT, lch_maxT, lch_minA, lch_maxA, tMin, tMax, aMin, aMax)) {
 			if (rectInRect(lch_minT, lch_maxT, lch_minA, lch_maxA, tMin, tMax, aMin, aMax)) {
-				result.sum += indexHeapL(lch_base + I_SUML);
-				result.cnt += indexHeap(lch_base + I_CNT );
+				sum += indexHeapL(lch_base + I_SUML);
+				cnt += indexHeap(lch_base + I_CNT );
 			} else {
-				doGetAvgValue(result, lch, aMin, aMax, tMin, tMax);
+				sum += doGetAvgValue(counterId, lch, aMin, aMax, tMin, tMax);
 			}
 		}
 		
 		if (rectOverlap(rch_minT, rch_maxT, rch_minA, rch_maxA, tMin, tMax, aMin, aMax)) {
 			if (rectInRect(rch_minT, rch_maxT, rch_minA, rch_maxA, tMin, tMax, aMin, aMax)) {
-				result.sum += indexHeapL(rch_base + I_SUML);
-				result.cnt += indexHeap(rch_base + I_CNT );
+				sum += indexHeapL(rch_base + I_SUML);
+				cnt += indexHeap(rch_base + I_CNT );
 			} else {
-				doGetAvgValue(result, rch, aMin, aMax, tMin, tMax);
+				sum += doGetAvgValue(counterId, rch, aMin, aMax, tMin, tMax);
 			}
 		}
+		
+		avgResultCount[counterId] += cnt;
+		return sum;
     }
     
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
     	
-    	int qId = avgQueryCount.getAndIncrement();
+    	int qId = avgQueryId.getAndIncrement();
+    	
+    	
+    	
     	if (qId == 0) {
     		avgQueryStartTime.set(System.nanoTime());
     	    avgQueryCost.set(0); 
@@ -864,30 +917,35 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	long st = System.nanoTime();
     	
-    	AvgResult result = new AvgResult();
-    	doGetAvgValue(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
     	
+    	
+    	long sum = doGetAvgValue(qId * ARRAYPAD, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
+    	int cnt = avgResultCount[qId * ARRAYPAD];
     	if (haveIncompressibleRecord) {
     		for (Message msg: incompressibleRecords) {
     			if (pointInRectL(msg.getT(), msg.getA(), tMin, tMax, aMin, aMax)) {
-					result.sum += msg.getA();
-					result.cnt++;
+					sum += msg.getA();
+					cnt++;
 				}
     		}
     	}
     	
-    	avgQueryCost.addAndGet(System.nanoTime() - st);
     	
-    	if (qId >= 30652 - 1) {
+    	
+    	long curCost = System.nanoTime() - st;
+    	avgQueryCost.addAndGet(curCost);
+    	System.out.println(String.format("qId=%d Thread=%d Start=%d Time=%d ResultCnt=%d Leaf=%d tMin=%d tMax=%d aMin=%d aMax=%d", qId, avgThreadId.get(), st, curCost, avgResultCount[qId * ARRAYPAD], avgResultCount[qId * ARRAYPAD + 1], tMin, tMax, aMin, aMax));
+    	/*if (avgFinishedQueryCount.incrementAndGet() >= 30652) {
     		long avgQueryEndTime = System.nanoTime();
-    		
     		System.out.println("====== SUMMARY ======\n" + new Date().toString());
     		System.out.println(String.format("total query time: %.4f", (avgQueryEndTime - avgQueryStartTime.get()) * 1e-6));
     		System.out.println(String.format("cost : leaf %.1f query %.1f (%.4f)", avgQueryLeafCost.get() * 1e-6, avgQueryCost.get() * 1e-6, (double)avgQueryLeafCost.get() / avgQueryCost.get()));
-    		System.out.println(String.format("count: leaf %d query %d (%.4f)", avgQueryLeafCount.get(), avgQueryCount.get(), (double)avgQueryLeafCount.get() / avgQueryCount.get()));
-    	}
+    		System.out.println(String.format("count: leaf %d query %d (%.4f)", avgQueryLeafCount.get(), avgQueryId.get(), (double)avgQueryLeafCount.get() / avgQueryId.get()));
+    	}*/
     	
-    	return result.cnt == 0 ? 0 : result.sum / result.cnt;
+    	
+    	
+    	return cnt == 0 ? 0 : sum / cnt;
     }
 
 }
