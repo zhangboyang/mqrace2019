@@ -26,7 +26,7 @@ public class DemoTester {
         //发送的线程数量
         int sendTsNum = 10;
         //查询的线程数量
-        int checkTsNum = 10;
+        int checkTsNum = 40;
         // 每次查询消息的最大跨度
         int maxMsgCheckSize = 100000;
         // 每次查询求平均的最大跨度

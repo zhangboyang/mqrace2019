@@ -1,23 +1,16 @@
 package io.openmessaging;
 
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import sun.misc.Unsafe;
 
 import java.io.IOException;
-import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import sun.nio.ch.FileChannelImpl;
 
 /**
  * 这是一个简单的基于内存的实现，以方便选手理解题意；
@@ -155,10 +148,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
         unsafe = theUnsafe;
     }
     
-    //private static final String storagePath = "./";
+//    private static final String storagePath = "./";
     private static final String storagePath = "/alidata1/race2019/data/";
     
-    //private static final long MEMSZ = 30000000L * 3;
+//    private static final long MEMSZ = 30000000L * 3;
     private static final long MEMSZ = 2100000000L * 3;
     private static final long memBase;
     
@@ -768,10 +761,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    private static final AtomicInteger avgQueryId = new AtomicInteger(0); 
 
     private static class AvgResult {
+    	public long sum;
     	public int cnt;
     }
     
-    private static long doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
+    private static void doGetAvgValue(AvgResult result, int cur, int aMin, int aMax, int tMin, int tMax)
     {
     	
     	if (cur >= HEAP_LEAF_BASE) {
@@ -819,18 +813,15 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				}
     		}
     		
+    		result.sum += sum + cnt * ((long)tBase - MessageCompressor.AOFFSET);
     		result.cnt += cnt;
-    		
     		
 //    		avgQueryLeafCost.addAndGet(System.nanoTime() - st);
 //    		avgQueryLeafCount.incrementAndGet();
 //    		avgResultCount[counterId + 1]++;
     		
-    		return sum + cnt * ((long)tBase - MessageCompressor.AOFFSET);
+    		return;
     	}
-    	
-    	long sum = 0;
-    	int cnt = 0;
     	
     	int lch = cur * 2;
     	int lch_base = I_SIZE * lch;
@@ -848,24 +839,22 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		if (rectOverlap(lch_minT, lch_maxT, lch_minA, lch_maxA, tMin, tMax, aMin, aMax)) {
 			if (rectInRect(lch_minT, lch_maxT, lch_minA, lch_maxA, tMin, tMax, aMin, aMax)) {
-				sum += indexHeapL(lch_base + I_SUML);
-				cnt += indexHeap(lch_base + I_CNT );
+				result.sum += indexHeapL(lch_base + I_SUML);
+				result.cnt += indexHeap(lch_base + I_CNT );
 			} else {
-				sum += doGetAvgValue(result, lch, aMin, aMax, tMin, tMax);
+				doGetAvgValue(result, lch, aMin, aMax, tMin, tMax);
 			}
 		}
 		
 		if (rectOverlap(rch_minT, rch_maxT, rch_minA, rch_maxA, tMin, tMax, aMin, aMax)) {
 			if (rectInRect(rch_minT, rch_maxT, rch_minA, rch_maxA, tMin, tMax, aMin, aMax)) {
-				sum += indexHeapL(rch_base + I_SUML);
-				cnt += indexHeap(rch_base + I_CNT );
+				result.sum += indexHeapL(rch_base + I_SUML);
+				result.cnt += indexHeap(rch_base + I_CNT );
 			} else {
-				sum += doGetAvgValue(result, rch, aMin, aMax, tMin, tMax);
+				doGetAvgValue(result, rch, aMin, aMax, tMin, tMax);
 			}
 		}
 		
-		result.cnt += cnt;
-		return sum;
     }
     
     @Override
@@ -886,7 +875,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	
     	AvgResult result = new AvgResult();
-    	long sum = doGetAvgValue(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
+    	doGetAvgValue(result, 1, (int)aMin, (int)aMax, (int)tMin, (int)tMax);
+    	long sum = result.sum;
     	int cnt = result.cnt;
     	if (haveIncompressibleRecord) {
     		for (Message msg: incompressibleRecords) {
