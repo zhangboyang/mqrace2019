@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import sun.misc.Unsafe;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
@@ -146,11 +147,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
         unsafe = theUnsafe;
     }
     
-//    private static final String storagePath = "./";
-    private static final String storagePath = "/alidata1/race2019/data/";
+    private static final String storagePath = "./";
+//    private static final String storagePath = "/alidata1/race2019/data/";
     
-//    private static final long MEMSZ = 30000000L * 3;
-    private static final long MEMSZ = 2100000000L * 3;
+    private static final long MEMSZ = 30000000L * 3;
+//    private static final long MEMSZ = 2100000000L * 3;
     private static final long memBase;
     
     static {
@@ -214,10 +215,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     private static volatile int state = 0;
-    private static Object stateLock = new Object();
+    private static final Object stateLock = new Object();
     
     private static boolean haveIncompressibleRecord = false;
-    private static ArrayList<Message> incompressibleRecords = new ArrayList<Message>();
+    private static final ArrayList<Message> incompressibleRecords = new ArrayList<Message>();
     
     private static void updateLeafTBase(int leafBlockId, int tBase)
     {
@@ -375,14 +376,23 @@ public class DefaultMessageStoreImpl extends MessageStore {
     };
     
     
-    private static RandomAccessFile sortedDataFile;
+    private static final RandomAccessFile sortedDataFile;
+    static {
+    	RandomAccessFile f = null;
+    	try {
+			f = new RandomAccessFile(storagePath + "sorted.data", "rw");
+		} catch (FileNotFoundException e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
+    	sortedDataFile = f;
+    }
     
     private static void externalMergeSort()
     {
     	System.out.println("[" + new Date().toString() + "]: merge-sort begin!");
     	
 		try {
-			sortedDataFile = new RandomAccessFile(storagePath + "sorted.data", "rw");
 			sortedDataFile.setLength(0);
 			
 			byte dummyRecord[] = new byte[MESSAGE_SIZE];
@@ -449,7 +459,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 					// 如果不能压缩，则放入slow-path
 					Message message = deserializeMessage(buffer[minPos], bufferPtr[minPos] * MESSAGE_SIZE);
 
-					//System.out.println("incompressible: " + dumpMessage(message));
+					System.out.println("incompressible: " + dumpMessage(message));
 		    		haveIncompressibleRecord = true;
 		    		incompressibleRecords.add(message);
 				} else {
@@ -870,4 +880,82 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	return result.cnt == 0 ? 0 : result.sum / result.cnt;
     }
 
+    
+    
+    
+    
+    
+    ////////////////////////////////////////////////////////////////
+    /////////////////////// SNAPSHOT ///////////////////////////////
+    ////////////////////////////////////////////////////////////////
+    private static void loadMemory(String fn, long base, long len) throws IOException
+    {
+    	if (unsafe.ARRAY_BYTE_INDEX_SCALE != 1) {
+    		System.out.println("ERROR: Unsafe.ARRAY_BYTE_INDEX_SCALE != 1");
+    		System.exit(-1);
+    	}
+    	
+		byte buf[] = new byte[4096];
+		RandomAccessFile f = new RandomAccessFile(storagePath + fn, "r");
+		
+		while (len > 0) {
+			int rlen = (int) Math.min((long)buf.length, len);
+			
+			f.readFully(buf, 0, rlen);
+			unsafe.copyMemory(buf, unsafe.ARRAY_BYTE_BASE_OFFSET, null, base, rlen);
+
+			base += rlen;
+			len -= rlen;
+		}
+    }
+    
+    private static void saveMemory(String fn, long base, long len)
+    {
+    	if (unsafe.ARRAY_BYTE_INDEX_SCALE != 1) {
+    		System.out.println("ERROR: Unsafe.ARRAY_BYTE_INDEX_SCALE != 1");
+    		System.exit(-1);
+    	}
+    	
+    	try {
+    		byte buf[] = new byte[4096];
+			RandomAccessFile f = new RandomAccessFile(storagePath + fn, "rw");
+			f.setLength(0);
+			
+			while (len > 0) {
+				int wlen = (int) Math.min((long)buf.length, len);
+				
+				unsafe.copyMemory(null, base, buf, unsafe.ARRAY_BYTE_BASE_OFFSET, wlen);
+				f.write(buf, 0, wlen);
+				
+				base += wlen;
+				len -= wlen;
+			}
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
+    }
+    
+    public static boolean loadSnapshot()
+    {
+    	System.out.println("[" + new Date().toString() + "]: LOADING SNAPSHOT ...");
+    	try {
+    		loadMemory("snapshot.storage.data", memBase, MEMSZ);
+    		loadMemory("snapshot.index.data", heapBase, HEAP_NBYTE);
+    		System.out.println("[" + new Date().toString() + "]: SNAPSHOT LOADED!");
+    		return true;
+    	} catch (IOException e) {
+    		System.out.println("[" + new Date().toString() + "]: ERROR LOADING SNAPSHOT!");
+    		return false;
+    	}
+    }
+    
+    public static void saveSnapshot()
+    {
+    	System.out.println("[" + new Date().toString() + "]: SAVING SNAPSHOT ...");
+    	saveMemory("snapshot.storage.data", memBase, MEMSZ);
+    	saveMemory("snapshot.index.data", heapBase, HEAP_NBYTE);
+    	System.out.println("[" + new Date().toString() + "]: SNAPSHOT SAVED!");
+    }
 }

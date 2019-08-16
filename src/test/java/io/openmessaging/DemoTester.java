@@ -10,11 +10,16 @@ import java.util.concurrent.atomic.AtomicLong;
 //该评测程序主要便于选手在本地优化和调试自己的程序
 
 public class DemoTester {
-
+	
+	static long genAfromT(long T)
+	{
+		return T % 2 == 0 ? T + 30000 : T - 500;
+	}
+	
     public static void main(String args[]) throws Exception {
         //评测相关配置
         //发送阶段的发送数量，也即发送阶段必须要在规定时间内把这些消息发送完毕方可
-        int msgNum = 1300000;
+        int msgNum = 13300000;
         //发送阶段的最大持续时间，也即在该时间内，如果消息依然没有发送完毕，则退出评测
         int sendTime = 30 * 60 * 1000;
         //查询阶段的最大持续时间，也即在该时间内，如果消息依然没有消费完毕，则退出评测
@@ -32,29 +37,35 @@ public class DemoTester {
         // 每次查询求平均的最大跨度
         int maxValueCheckSize = 100000;
 
-        MessageStore messageStore = null;
+        DefaultMessageStoreImpl messageStore = null;
 
         try {
             Class queueStoreClass = Class.forName("io.openmessaging.DefaultMessageStoreImpl");
-            messageStore = (MessageStore)queueStoreClass.newInstance();
+            messageStore = (DefaultMessageStoreImpl)queueStoreClass.newInstance();
         } catch (Throwable t) {
             t.printStackTrace();
             System.exit(-1);
         }
+        
+        boolean snapshotLoaded = false;
+        
+        if (!snapshotLoaded) snapshotLoaded = DefaultMessageStoreImpl.loadSnapshot();
 
         //Step1: 发送消息
         long sendStart = System.currentTimeMillis();
         long maxTimeStamp = System.currentTimeMillis() + sendTime;
-        AtomicLong sendCounter = new AtomicLong(0);
-        Thread[] sends = new Thread[sendTsNum];
-        for (int i = 0; i < sendTsNum; i++) {
-            sends[i] = new Thread(new Producer(messageStore, maxTimeStamp, msgNum, sendCounter));
-        }
-        for (int i = 0; i < sendTsNum; i++) {
-            sends[i].start();
-        }
-        for (int i = 0; i < sendTsNum; i++) {
-            sends[i].join();
+        if (!snapshotLoaded) {
+	        AtomicLong sendCounter = new AtomicLong(0);
+	        Thread[] sends = new Thread[sendTsNum];
+	        for (int i = 0; i < sendTsNum; i++) {
+	            sends[i] = new Thread(new Producer(messageStore, maxTimeStamp, msgNum, sendCounter));
+	        }
+	        for (int i = 0; i < sendTsNum; i++) {
+	            sends[i].start();
+	        }
+	        for (int i = 0; i < sendTsNum; i++) {
+	            sends[i].join();
+	        }
         }
         long sendSend = System.currentTimeMillis();
         System.out.printf("Send: %d ms Num:%d\n", sendSend - sendStart, msgNum);
@@ -77,25 +88,34 @@ public class DemoTester {
         long msgCheckEnd = System.currentTimeMillis();
         System.out.printf("Message Check: %d ms Num:%d\n", msgCheckEnd - msgCheckStart, msgCheckNum.get());
 
-        //Step3: 查询聚合结果
-        long checkStart = System.currentTimeMillis();
-        AtomicLong valueCheckTimes = new AtomicLong(0);
-        AtomicLong valueCheckNum = new AtomicLong(0);
-        Thread[] checks = new Thread[checkTsNum];
-        for (int i = 0; i < checkTsNum; i++) {
-            checks[i] = new Thread(new ValueChecker(messageStore, maxCheckTime, checkTimes, msgNum, maxValueCheckSize, valueCheckTimes, valueCheckNum));
+        if (!snapshotLoaded) {
+        	DefaultMessageStoreImpl.saveSnapshot();
         }
-        for (int i = 0; i < checkTsNum; i++) {
-            checks[i].start();
+        
+        
+        for (int r = 0; r < 10; r++) {
+	        //Step3: 查询聚合结果
+	        long checkStart = System.currentTimeMillis();
+	        AtomicLong valueCheckTimes = new AtomicLong(0);
+	        AtomicLong valueCheckNum = new AtomicLong(0);
+	        Thread[] checks = new Thread[checkTsNum];
+	        for (int i = 0; i < checkTsNum; i++) {
+	            checks[i] = new Thread(new ValueChecker(messageStore, maxCheckTime, checkTimes, msgNum, maxValueCheckSize, valueCheckTimes, valueCheckNum));
+	        }
+	        for (int i = 0; i < checkTsNum; i++) {
+	            checks[i].start();
+	        }
+	        for (int i = 0; i < checkTsNum; i++) {
+	            checks[i].join();
+	        }
+	        long checkEnd = System.currentTimeMillis();
+	        System.out.printf(r + " - Value Check: %d ms Num: %d\n", checkEnd - checkStart, valueCheckNum.get());
+	
+	        //评测结果
+	//        System.out.printf("Total Score:%d\n", (msgNum / (sendSend- sendStart) + msgCheckNum.get() / (msgCheckEnd - msgCheckStart) + valueCheckNum.get() / (checkEnd - checkStart)));
+	        System.out.printf(r + " - Value Check Score:%d\n", valueCheckNum.get() / (checkEnd - checkStart));
         }
-        for (int i = 0; i < checkTsNum; i++) {
-            checks[i].join();
-        }
-        long checkEnd = System.currentTimeMillis();
-        System.out.printf("Value Check: %d ms Num: %d\n", checkEnd - checkStart, valueCheckNum.get());
-
-        //评测结果
-        System.out.printf("Total Score:%d\n", (msgNum / (sendSend- sendStart) + msgCheckNum.get() / (msgCheckEnd - msgCheckStart) + valueCheckNum.get() / (checkEnd - checkStart)));
+	        
     }
     static class Producer implements Runnable {
 
@@ -141,10 +161,10 @@ public class DemoTester {
 	                	
 	                    
 	                    // 为测试方便, 插入的是有规律的数据, 不是实际测评的情况
-	                    messageStore.put(new Message(count, count, getBody(count, count)));
+	                    messageStore.put(new Message(genAfromT(count), count, getBody(count, genAfromT(count))));
 	                    if ((count & 0x1L) == 0) {
 	                        //偶数count多加一条消息
-	                        messageStore.put(new Message(count, count, getBody(count, count)));
+	                        messageStore.put(new Message(genAfromT(count), count, getBody(count, genAfromT(count))));
 	                    }
 	                } catch (Throwable t) {
 	                    t.printStackTrace();
@@ -197,44 +217,48 @@ public class DemoTester {
                         tIndex1 = 0;
                     }
                     int tIndex2 = random.nextInt(maxCheckSize) + tIndex1;
-                    int index1 = Math.max(aIndex1, tIndex1);
-                    int index2 = Math.min(aIndex2, tIndex2);
 
                     List<Message> msgs = messageStore.getMessage(aIndex1, aIndex2, tIndex1, tIndex2);
 
                     //验证消息
                     Iterator<Message> iter = msgs.iterator();
-                    while (iter.hasNext()) {
-                        if (index1 > index2) {
-                        	System.out.println("ERROR1");
-                            checkError();
+                    for (int index1 = tIndex1; index1 <= tIndex2 && index1 <= maxIndex; index1++) {
+                        
+
+                        if (aIndex1 <= genAfromT(index1) && genAfromT(index1) <= aIndex2) {
+                        	if (!iter.hasNext()) {
+                        		System.out.println(String.format("ERROR1 t=%d a=%d ; %d %d %d %d", index1, genAfromT(index1), aIndex1, aIndex2, tIndex1, tIndex2));
+	                            checkError();
+                        	}
+	                        Message msg = iter.next();
+	                        if (msg.getA() != genAfromT(msg.getT()) || msg.getT() != index1 ||
+	                                ByteBuffer.wrap(msg.getBody()).getLong() != index1) {
+	                        	System.out.println("T="+ msg.getT());
+	                        	System.out.println("A="+ msg.getA());
+	                        	System.out.println("index1="+ index1);
+	                        	System.out.println("ERROR2");
+	                            checkError();
+	                        }
+	
+	                        //偶数需要多验证一次
+	                        if ((index1 & 0x1) == 0) {
+	                        	if (!iter.hasNext()) {
+	                        		System.out.println("ERROR3.0");
+	                                checkError();
+	                        	}
+	                            msg = iter.next();
+	                            if (msg.getA() != genAfromT(msg.getT()) || msg.getT() != index1
+	                                    || ByteBuffer.wrap(msg.getBody()).getLong() != index1) {
+	                            	System.out.println("ERROR3");
+	                                checkError();
+	                            }
+	                        }
                         }
 
-                        Message msg = iter.next();
-                        if (msg.getA() != msg.getT() || msg.getA() != index1 ||
-                                ByteBuffer.wrap(msg.getBody()).getLong() != index1) {
-                        	System.out.println("T="+ msg.getT());
-                        	System.out.println("A="+ msg.getA());
-                        	System.out.println("index1="+ index1);
-                        	System.out.println("ERROR2");
-                            checkError();
-                        }
-
-                        //偶数需要多验证一次
-                        if ((index1 & 0x1) == 0 && iter.hasNext()) {
-                            msg = iter.next();
-                            if (msg.getA() != msg.getT() || msg.getA() != index1
-                                    || ByteBuffer.wrap(msg.getBody()).getLong() != index1) {
-                            	System.out.println("ERROR3");
-                                checkError();
-                            }
-                        }
-
-                        ++index1;
                     }
 
 
-                    if (index1 - 1 != index2) {
+                    if (iter.hasNext()) {
                     	System.out.println("ERROR4");
                         checkError();
                     }
@@ -292,32 +316,71 @@ public class DemoTester {
                         tIndex1 = 0;
                     }
                     int tIndex2 = random.nextInt(maxCheckSize) + tIndex1;
-                    int index1 = Math.max(aIndex1, tIndex1);
-                    int index2 = Math.min(aIndex2, tIndex2);
 
                     long val = messageStore.getAvgValue(aIndex1, aIndex2, tIndex1, tIndex2);
-
-                    //验证
-                    int evenIndex1 = (index1 & 0x1) == 0 ? index1 : index1 + 1;
-                    int evenIndex2 = (index2 & 0x1) == 0 ? index2 : index2 - 1;
-
-                    long res = 0;
+                    
+                    long sum = 0;
                     long count = 0;
-                    if (evenIndex1 <= evenIndex2) {
-                        //顺序数之和
-                        long sum1 = ((long)((long)index2 + index1) * ((long)index2 - index1 + 1)) >>> 1;
-                        //重复的偶数之和
-                        long sum2 = ((long)((long)evenIndex1 + evenIndex2) * (((long)evenIndex2 - evenIndex1 >>> 1) + 1)) >>> 1;
-                        long sum = sum1 + sum2;
-                        count = (long)index2 - index1 + 1 + ((long)evenIndex2 - evenIndex1 >>> 1) + 1;
-                        res = sum / count;
-                    } else {
-                        //顺序数之和
-                        long sum = ((long)index2 + index1) * ((long)index2 - index1 + 1) >>> 1;
-                        count = (long)index2 - index1 + 1;
-                        res = sum / count;
+                    
+                    /*
+                    // UNIVERSAL BRUTE FORCE METHOD
+                    for (int idx = tIndex1; idx <= tIndex2 && idx <= maxIndex; idx++) {
+                    	int nr = idx % 2 == 0 ? 2 : 1;
+                    	for (int r = 0; r < nr; r++) {
+	                    	if (aIndex1 <= genAfromT(idx) && genAfromT(idx) <= aIndex2) {
+	                    		sum += genAfromT(idx);
+	                    		count++;
+	                    	}
+                    	}
                     }
-
+                    //System.out.println("sum=" + sum + " count=" + count);
+                    //sum = 0; count = 0;
+                    */
+                    
+                    long tRangeL = tIndex1;
+                    long tRangeR = Math.min(tIndex2, maxIndex);
+                    
+                    long tOddRangeL = tRangeL % 2 == 0 ? tRangeL + 1 : tRangeL;
+                    long tOddRangeR = tRangeR % 2 == 0 ? tRangeR - 1 : tRangeR;
+                    if (tOddRangeL <= tOddRangeR) {
+                    	long aOddRangeL = tOddRangeL - 500;
+                    	long aOddRangeR = tOddRangeR - 500;
+                    	
+                    	aOddRangeL = Math.max(aOddRangeL, aIndex1);
+                    	aOddRangeR = Math.min(aOddRangeR, aIndex2);
+                    	
+                    	if (aOddRangeL % 2 == 0) aOddRangeL++;
+                    	if (aOddRangeR % 2 == 0) aOddRangeR--;
+                    	
+                    	if (aOddRangeL <= aOddRangeR) {
+	                    	long aOddCount = (aOddRangeR - aOddRangeL) / 2 + 1;
+	                    	count += aOddCount;
+	                    	sum += (aOddRangeL + aOddRangeR) * aOddCount / 2;
+                    	}
+                    }
+                    
+                    
+                    long tEvenRangeL = tRangeL % 2 == 1 ? tRangeL + 1 : tRangeL;
+                    long tEvenRangeR = tRangeR % 2 == 1 ? tRangeR - 1 : tRangeR;
+                    if (tEvenRangeL <= tEvenRangeR) {
+                    	long aEvenRangeL = tEvenRangeL + 30000;
+                    	long aEvenRangeR = tEvenRangeR + 30000;
+                    	
+                    	aEvenRangeL = Math.max(aEvenRangeL, aIndex1);
+                    	aEvenRangeR = Math.min(aEvenRangeR, aIndex2);
+                    	
+                    	if (aEvenRangeL % 2 == 1) aEvenRangeL++;
+                    	if (aEvenRangeR % 2 == 1) aEvenRangeR--;
+                    	
+                    	if (aEvenRangeL <= aEvenRangeR) {
+	                    	long aEvenCount = (aEvenRangeR - aEvenRangeL) / 2 + 1;
+	                    	count += aEvenCount * 2;
+	                    	sum += (aEvenRangeL + aEvenRangeR) * aEvenCount / 2 * 2;
+                    	}
+                    }
+                    
+                    //System.out.println("sum=" + sum + " count=" + count);
+                    long res = count == 0 ? 0 : sum / count;
                     if (res != val) {
                         checkError(aIndex1, aIndex2, tIndex1, tIndex2, res, val);
                     }
