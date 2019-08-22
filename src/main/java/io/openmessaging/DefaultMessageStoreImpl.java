@@ -6,10 +6,13 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
+
 import sun.misc.Unsafe;
 
 import java.io.FileNotFoundException;
@@ -66,48 +69,29 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		});
     }
     
-	
-	private static final int MAX_MSGBUF = 1000;
-	private static final int MESSAGE_SIZE = 50;
-
-
-
     
-    private static final Unsafe unsafe;
-
-    static {
-        Unsafe theUnsafe;
-        try {
-            Field f = Unsafe.class.getDeclaredField("theUnsafe");
-            f.setAccessible(true);
-            theUnsafe = (Unsafe) f.get(null);
-        } catch (Exception e) {
-            theUnsafe = null;
-        }
-        unsafe = theUnsafe;
-    }
-    
-    private static final String storagePath = "./";
-//    private static final String storagePath = "/alidata1/race2019/data/";
-    
-    private static final long MEMSZ = 30000000L * 3;
-//    private static final long MEMSZ = 2100000000L * 3;
-    private static final long memBase;
-    
-    static {
-        memBase = unsafe.allocateMemory(MEMSZ);
-        unsafe.setMemory(memBase, MEMSZ, (byte)0);
-        System.out.println(String.format("memBase=%016X", memBase));
-    }
-
     private static volatile int state = 0;
     private static final Object stateLock = new Object();
-
-    private static final int MAXTHREAD = 100;
     
+    static {
+    	Runtime.getRuntime().addShutdownHook(new Thread() {
+    		public void run() {
+    			System.out.println("[" + new Date() + "]: shutdown hook");
+    		}
+    	});
+    }
+    
+
+    private static final String storagePath = "./";
+//    private static final String storagePath = "/alidata1/race2019/data/";
+
+
+
+    
+    private static final Object insertLock = new Object();
     
     @Override
-    public synchronized void put(Message message) {
+    public void put(Message message) {
     	
     	if (state == 0) {
     		synchronized (stateLock) {
@@ -122,18 +106,24 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		System.out.println(dumpMessage(message));
     	}
     	
-    	RTree.insert(message);
+    	synchronized (insertLock) {
+			RTree.insert(message);
+    	}
     	
     }
     
     @Override
     public synchronized List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
 
-    	if (state == 0) {
+//    	boolean firstFlag = false;
+    	
+    	if (state == 1) {
     		synchronized (stateLock) {
-    			if (state == 0) {
+    			if (state == 1) {
     				System.out.println("[" + new Date() + "]: getMessage() started");
-					state = 1;
+    				RTree.finishInsert();
+//    				firstFlag = true;
+    				state = 2;
     			}
     		}
     	}
@@ -148,7 +138,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    	}
     	
 
-    	// 为最后的查询平均值预热JVM
+//    	//为最后的查询平均值预热JVM
 //    	getAvgValue(aMin, aMax, tMin, tMax);
 //    	if (firstFlag) {
 //    		for (int i = 0; i < 30000; i++) {
@@ -162,82 +152,5 @@ public class DefaultMessageStoreImpl extends MessageStore {
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
     	return RTree.queryAverage(tMin, tMax, aMin, aMax);
-    }
-
-    
-    
-    
-    
-    
-    ////////////////////////////////////////////////////////////////
-    /////////////////////// SNAPSHOT ///////////////////////////////
-    ////////////////////////////////////////////////////////////////
-    private static void loadMemory(String fn, long base, long len) throws IOException
-    {
-    	if (unsafe.ARRAY_BYTE_INDEX_SCALE != 1) {
-    		System.out.println("ERROR: Unsafe.ARRAY_BYTE_INDEX_SCALE != 1");
-    		System.exit(-1);
-    	}
-    	
-		byte buf[] = new byte[4096];
-		RandomAccessFile f = new RandomAccessFile(storagePath + fn, "r");
-		
-		while (len > 0) {
-			int rlen = (int) Math.min((long)buf.length, len);
-			
-			f.readFully(buf, 0, rlen);
-			unsafe.copyMemory(buf, unsafe.ARRAY_BYTE_BASE_OFFSET, null, base, rlen);
-
-			base += rlen;
-			len -= rlen;
-		}
-    }
-    
-    private static void saveMemory(String fn, long base, long len)
-    {
-    	if (unsafe.ARRAY_BYTE_INDEX_SCALE != 1) {
-    		System.out.println("ERROR: Unsafe.ARRAY_BYTE_INDEX_SCALE != 1");
-    		System.exit(-1);
-    	}
-    	
-    	try {
-    		byte buf[] = new byte[4096];
-			RandomAccessFile f = new RandomAccessFile(storagePath + fn, "rw");
-			f.setLength(0);
-			
-			while (len > 0) {
-				int wlen = (int) Math.min((long)buf.length, len);
-				
-				unsafe.copyMemory(null, base, buf, unsafe.ARRAY_BYTE_BASE_OFFSET, wlen);
-				f.write(buf, 0, wlen);
-				
-				base += wlen;
-				len -= wlen;
-			}
-			
-		} catch (Exception e) {
-			e.printStackTrace();
-			System.exit(-1);
-		}
-    }
-    
-    public static boolean loadSnapshot()
-    {
-    	System.out.println("[" + new Date().toString() + "]: LOADING SNAPSHOT ...");
-    	try {
-    		loadMemory("snapshot.mem.data", memBase, MEMSZ);
-    		System.out.println("[" + new Date().toString() + "]: SNAPSHOT LOADED!");
-    		return true;
-    	} catch (IOException e) {
-    		System.out.println("[" + new Date().toString() + "]: ERROR LOADING SNAPSHOT!");
-    		return false;
-    	}
-    }
-    
-    public static void saveSnapshot()
-    {
-    	System.out.println("[" + new Date().toString() + "]: SAVING SNAPSHOT ...");
-    	saveMemory("snapshot.mem.data", memBase, MEMSZ);
-    	System.out.println("[" + new Date().toString() + "]: SNAPSHOT SAVED!");
     }
 }

@@ -5,6 +5,7 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Date;
 
 public class RTree {
 	
@@ -129,10 +130,11 @@ public class RTree {
     
     
     
-    private static int leafCount = 0;
+    private static int leafNodeCount = 0;
+    private static int treeNodeCount = 0;
     private static int allocLeafNode()
     {
-    	return ++leafCount;
+    	return ++leafNodeCount;
     }
     private static NodeEntry treeRoot;
     static {
@@ -142,10 +144,11 @@ public class RTree {
     
     private static NodeEntry[] allocTreeNode()
     {
+    	treeNodeCount++;
     	return new NodeEntry[Mhigh + 1]; 
     }
     
-    static final long leafTempArray[] = new long[LMhigh + 1];
+    private static final long leafTempArray[] = new long[LMhigh + 1];
     private static NodeEntry splitLeaf(NodeEntry leaf)
     {
     	// 叶子节点的分裂：因为叶子节点里面都是点（不是矩形），所以采用简单的分裂方法，随机找一个轴，按中位数分成两半
@@ -430,7 +433,13 @@ public class RTree {
     }
     
     
-    
+    public static void finishInsert()
+    {
+    	System.out.println("[" + new Date() + "]: RTree.finishInsert()");
+    	
+    	System.out.println(String.format("tree-node: %d", treeNodeCount));
+    	System.out.println(String.format("leaf-node: %d", leafNodeCount));
+    }
     
     
     
