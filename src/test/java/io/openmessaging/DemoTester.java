@@ -13,13 +13,23 @@ public class DemoTester {
 	
 	static long genAfromT(long T)
 	{
+//		long x = 100003;
+//		long r = 1;
+//		while (T > 0) {
+//			if ((T & 1) != 0) {
+//				r *= x;
+//			}
+//			T = T >>> 1;
+//			x = x * x;
+//		}
+//		return r & 0xffffffffffffL;
 		return T % 2 == 0 ? T + 30000 : T - 500;
 	}
 	
     public static void main(String args[]) throws Exception {
         //评测相关配置
         //发送阶段的发送数量，也即发送阶段必须要在规定时间内把这些消息发送完毕方可
-        int msgNum = 13300000;
+        int msgNum = 1330000;
         //发送阶段的最大持续时间，也即在该时间内，如果消息依然没有发送完毕，则退出评测
         int sendTime = 30 * 60 * 1000;
         //查询阶段的最大持续时间，也即在该时间内，如果消息依然没有消费完毕，则退出评测
@@ -49,7 +59,7 @@ public class DemoTester {
         
         boolean snapshotLoaded = false;
         
-        if (!snapshotLoaded) snapshotLoaded = DefaultMessageStoreImpl.loadSnapshot();
+//        if (!snapshotLoaded) snapshotLoaded = DefaultMessageStoreImpl.loadSnapshot();
 
         //Step1: 发送消息
         long sendStart = System.currentTimeMillis();
@@ -88,9 +98,9 @@ public class DemoTester {
         long msgCheckEnd = System.currentTimeMillis();
         System.out.printf("Message Check: %d ms Num:%d\n", msgCheckEnd - msgCheckStart, msgCheckNum.get());
 
-        if (!snapshotLoaded) {
-        	DefaultMessageStoreImpl.saveSnapshot();
-        }
+//        if (!snapshotLoaded) {
+//        	DefaultMessageStoreImpl.saveSnapshot();
+//        }
         
         
         for (int r = 0; r < 10; r++) {
@@ -236,6 +246,7 @@ public class DemoTester {
 	                        	System.out.println("T="+ msg.getT());
 	                        	System.out.println("A="+ msg.getA());
 	                        	System.out.println("index1="+ index1);
+	                        	System.out.println("body="+ByteBuffer.wrap(msg.getBody()).getLong());
 	                        	System.out.println("ERROR2");
 	                            checkError();
 	                        }

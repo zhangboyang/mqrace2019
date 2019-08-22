@@ -46,8 +46,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	{
 		char[] HEX_ARRAY = "0123456789ABCDEF".toCharArray();
     	StringBuilder s = new StringBuilder();
-    	s.append(String.format("%08X,", message.getT()));
-    	s.append(String.format("%08X,", message.getA()));
+    	s.append(String.format("%016X,", message.getT()));
+    	s.append(String.format("%016X,", message.getA()));
     	byte[] bytes = message.getBody();
     	for (int j = 0; j < bytes.length; j++) {
             int v = bytes[j] & 0xFF;
@@ -69,31 +69,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	
 	private static final int MAX_MSGBUF = 1000;
 	private static final int MESSAGE_SIZE = 50;
-	
-	private static Message deserializeMessage(ByteBuffer buffer, int position)
-	{
-		byte body[] = new byte[34];
-		long t = buffer.getLong(position + 0);
-		long a = buffer.getLong(position + 8);
-		System.arraycopy(buffer.array(), position + 16, body, 0, body.length);
-		return new Message(a, t, body); 
-	}
-	
 
-	private static boolean rectOverlap(long aLeft, long aRight, long aBottom, long aTop, long bLeft, long bRight, long bBottom, long bTop)
-	{
-		return aLeft <= bRight && aRight >= bLeft && aTop >= bBottom && aBottom <= bTop;
-	}
-	
-	private static boolean pointInRect(long lr, long bt, long rectLeft, long rectRight, long rectBottom, long rectTop)
-	{
-		return rectLeft <= lr && lr <= rectRight && rectBottom <= bt && bt <= rectTop;
-	}
-	
-	private static boolean rectInRect(long aLeft, long aRight, long aBottom, long aTop, long bLeft, long bRight, long bBottom, long bTop)
-	{
-		return bLeft <= aLeft && aRight <= bRight && bBottom <= aBottom && aTop <= bTop;
-	}
+
+
     
     private static final Unsafe unsafe;
 
@@ -127,8 +105,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     private static final int MAXTHREAD = 100;
     
+    
     @Override
-    public void put(Message message) {
+    public synchronized void put(Message message) {
     	
     	if (state == 0) {
     		synchronized (stateLock) {
@@ -143,30 +122,32 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		System.out.println(dumpMessage(message));
     	}
     	
+    	RTree.insert(message);
+    	
     }
     
-    private static final Object getMessageLock = new Object(); 
     @Override
-    public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
+    public synchronized List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
 
-    	boolean firstFlag = false;
-    	ArrayList<Message> result;
-    	
-    	synchronized (getMessageLock) {
-	    	if (state == 1) {
-	    		System.out.println("[" + new Date() + "]: getMessage() started");
-
-				state = 2;
-				firstFlag = true;
-	    	}
-	    	
-	    	System.gc();
-	    	
-	    	result = new ArrayList<Message>();
-	    	
-
+    	if (state == 0) {
+    		synchronized (stateLock) {
+    			if (state == 0) {
+    				System.out.println("[" + new Date() + "]: getMessage() started");
+					state = 1;
+    			}
+    		}
     	}
     	
+    	
+    	ArrayList<Message> result = new ArrayList<Message>();
+    	RTree.queryData(result, tMin, tMax, aMin, aMax);
+    	doSortMessage(result);
+    	
+//    	for (int i = 0; i < result.size(); i++) {
+//    		System.out.println("RESULT:" + dumpMessage(result.get(i)));
+//    	}
+    	
+
     	// 为最后的查询平均值预热JVM
 //    	getAvgValue(aMin, aMax, tMin, tMax);
 //    	if (firstFlag) {
@@ -180,7 +161,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
-    	return 0;
+    	return RTree.queryAverage(tMin, tMax, aMin, aMax);
     }
 
     
