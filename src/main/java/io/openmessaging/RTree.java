@@ -522,92 +522,15 @@ public class RTree {
     }
     
     
-    
-    //////////////////////////////////////////////////////////////////////////////////////////////
-    
-    public static long lrChecksum;
-    public static long checkTree(NodeEntry root)
-    {
-    	if (root.treeptr == null) {
-    		
-    		long leafLeft = Long.MAX_VALUE;
-    		long leafRight = Long.MIN_VALUE;
-    		long leafBottom = Long.MAX_VALUE;
-    		long leafTop = Long.MIN_VALUE;
-    		
-        	long pointLeaf = getPointLeaf(root.leafptr);
-        	
-        	long leafSumA = 0;
-        	
-    		for (int i = 0; i < root.nchild; i++) {
-            	long lr = unsafe.getLong(pointLeaf + i * 16);
-            	long bt = unsafe.getLong(pointLeaf + i * 16 + 8);
-            	
-            	leafLeft = Math.min(leafLeft, lr);
-            	leafRight = Math.max(leafRight, lr);
-            	leafBottom = Math.min(leafBottom, bt);
-            	leafTop = Math.max(leafTop, bt);
-            	
-            	assert bt == (lr % 2 == 0 ? lr + 30000 : lr - 500);
-            	leafSumA += bt;
-            	lrChecksum += lr;
-    		}
-    		
-        	assert leafLeft == root.left;
-        	assert leafRight == root.right;
-        	assert leafBottom == root.bottom;
-        	assert leafTop == root.top;
-        	assert root.nchild == root.cntA;
-        	assert leafSumA == root.sumA;
-        	
-    		return root.nchild;
-    	}
-    	
-    	long oldLeft = root.left;
-    	long oldRight = root.right;
-    	long oldBottom = root.bottom;
-    	long oldTop = root.top;
-    	int oldCntA = root.cntA;
-    	long oldSumA = root.sumA; 
-    	
-    	long nodeCnt = 0;
-    	for (int i = 0; i < root.nchild; i++) {
-    		nodeCnt += checkTree(root.treeptr[i]);
-    	}
-    	root.update();
-    	assert oldLeft == root.left;
-    	assert oldRight == root.right;
-    	assert oldBottom == root.bottom;
-    	assert oldTop == root.top;
-    	assert nodeCnt == root.cntA;
-    	assert oldCntA == root.cntA;
-    	assert oldSumA == root.sumA;
-//    	assert false;
-    	return nodeCnt;
-    }
-    public static void checkTree()
-    {
-    	System.out.println("[" + new Date() + "]: RTree.checkTree()");
-    	lrChecksum = 0;
-    	long nodeCnt = checkTree(treeRoot);
-    	System.out.println("[" + new Date() + "]: " + String.format("nodecnt=%d", nodeCnt));
-    	System.out.println("[" + new Date() + "]: " + String.format("(%d %d %d %d) (%d %d)", treeRoot.left, treeRoot.right, treeRoot.bottom, treeRoot.top, treeRoot.cntA, treeRoot.sumA));
-    	System.out.println("[" + new Date() + "]: " + String.format("lrChecksum=%d", lrChecksum));
-    	
-    }
-    
+
     
     
     
     //////////////////////////////////////////////////////////////////////////////////////////////
     
-    static long depth = 1;
     private static void queryData(NodeEntry root, ArrayList<Message> result, long left, long right, long bottom, long top)
     {
-    	System.out.println(String.format("%"+(depth++)+"s query %08X: (%d %d %d %d)", "", System.identityHashCode(root), left, right, bottom, top));
     	if (root.treeptr == null) {
-    		System.out.println(String.format("%"+depth+"s leaf  %08X: child=%d", "", System.identityHashCode(root), root.nchild)); 
-    		
     		long pointLeaf = getPointLeaf(root.leafptr);
         	long dataLeaf = getDataLeaf(root.leafptr);
         	
@@ -622,24 +545,19 @@ public class RTree {
     		}
     		
     		doneLeaf(root.leafptr);
-    		depth--;
     		return;
     	}
     	for (int i = 0; i < root.nchild; i++) {
     		NodeEntry ch = root.treeptr[i];
-    		System.out.println(String.format("%"+depth+"s node  %08X: child[%d]=%08X (%d %d %d %d)", "", System.identityHashCode(root), i, System.identityHashCode(ch), ch.left, ch.right, ch.bottom, ch.top)); 
     		if (rectOverlap(ch.left, ch.right, ch.bottom, ch.top, left, right, bottom, top)) {
     			queryData(ch, result, left, right, bottom, top);
     		}
     	}
-    	depth--;
     }
     
     public static void queryData(ArrayList<Message> result, long left, long right, long bottom, long top)
     {
-    	System.out.println("NEW QUERY!");
     	queryData(treeRoot, result, left, right, bottom, top);
-    	
     }
     
     

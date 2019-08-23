@@ -99,8 +99,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		msgBufferPtr = 0;
     }
     
-    private static long sumT = 0;
-    private static long sumA = 0;
     @Override
     public void put(Message message) {
 
@@ -112,14 +110,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			}
     		}
     	}
-    	
-//    	message.setT(message.getT() + 2000000000);
-//    	message.setA(message.getA() + 2000000000);
     
     	synchronized (insertLock) {
     		msgBuffer[msgBufferPtr++] = message;
-    		sumA += message.getA();
-    		sumT += message.getT();
     		
 			if (insCount % 1000000 == 0) {
 				System.out.println(String.format("insert %d: %s", insCount, dumpMessage(message)));
@@ -147,10 +140,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				flushMsgBuffer();
     				msgBuffer = null;
     				System.out.println(String.format("total=%d", insCount));
-    				System.out.println(String.format("sumA=%d", sumA));
-    				System.out.println(String.format("sumT=%d", sumT));
     				RTree.finishInsert();
-    				RTree.checkTree();
     				System.gc();
     				
 //    				firstFlag = true;
@@ -162,17 +152,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	ArrayList<Message> result = new ArrayList<Message>();
     	RTree.queryData(result, tMin, tMax, aMin, aMax);
-//    	RTree.queryData(result, tMin + 2000000000, tMax + 2000000000, aMin + 2000000000, aMax + 2000000000);
-//    	for (int i = 0; i < result.size(); i++) {
-//    		Message message = result.get(i);
-//        	message.setT(message.getT() - 2000000000);
-//        	message.setA(message.getA() - 2000000000);
-//    	}
+
     	doSortMessage(result);
-    	
-//    	for (int i = 0; i < result.size(); i++) {
-//    		System.out.println("RESULT:" + dumpMessage(result.get(i)));
-//    	}
     	
 
 //    	//为最后的查询平均值预热JVM
