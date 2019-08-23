@@ -104,7 +104,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     private static void insertProc()
     {
-    	System.out.println("[" + new Date() + "]: sort started");
+    	System.out.println("[" + new Date() + "]: insert thread started");
     	
     	try {
 	    	do {
@@ -114,7 +114,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	    				
 	    				RTree.insert(buffer[i]);
 	    				if (insCount % 1000000 == 0) {
-	    					System.out.println(String.format("ins %d: %s", insCount, dumpMessage(buffer[i])));
+	    					System.out.println("[" + new Date() + "]: " + String.format("ins %d: %s", insCount, dumpMessage(buffer[i])));
 	    				}
 	    				insCount++;
 	    			}
@@ -125,19 +125,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
     	
-    	System.out.println("[" + new Date() + "]: sort finished");
+    	System.out.println("[" + new Date() + "]: insert thread finished");
     }
 
     
     private static final int MAXTHREAD = 100;
-    private static final int MAXQUEUE = 1000;
+    private static final int MAXQUEUE = 20;
     
     private static final ArrayBlockingQueue<Message[]> insertQueue = new ArrayBlockingQueue<Message[]>(MAXQUEUE);
     
 
     
     
-    private static final int MAXBUFFER = 1000;
+    private static final int MAXBUFFER = 1000000;
     private static class PutThreadLocalData {
     	Message[] buffer;
     	int bufptr;
