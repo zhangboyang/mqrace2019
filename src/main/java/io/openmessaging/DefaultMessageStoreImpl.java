@@ -88,6 +88,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final Object insertLock = new Object();
     private static int insCount = 0;
     
+    private static Message[] msgBuffer = new Message[10000000];
+    private static int msgBufferPtr = 0;
+    
+    private static void flushMsgBuffer()
+    {
+    	for (int i = 0; i < msgBufferPtr; i++) {
+			RTree.insert(msgBuffer[i]);
+		}
+		msgBufferPtr = 0;
+    }
+    
     @Override
     public void put(Message message) {
     	
@@ -101,12 +112,16 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     
     	synchronized (insertLock) {
-			RTree.insert(message);
-			
+    		msgBuffer[msgBufferPtr++] = message;
+    		
 			if (insCount % 1000000 == 0) {
 				System.out.println(String.format("insert %d: %s", insCount, dumpMessage(message)));
 			}
 			insCount++;
+			
+    		if (msgBufferPtr == msgBuffer.length) {
+    			flushMsgBuffer();
+    		}
     	}
     	
     }
@@ -120,7 +135,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		synchronized (stateLock) {
     			if (state == 1) {
     				System.out.println("[" + new Date() + "]: getMessage() started");
+    				
+    				flushMsgBuffer();
+    				msgBuffer = null;
     				RTree.finishInsert();
+    				System.gc();
+    				
 //    				firstFlag = true;
     				state = 2;
     			}

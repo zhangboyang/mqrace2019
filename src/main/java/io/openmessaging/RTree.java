@@ -1,27 +1,18 @@
 package io.openmessaging;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Date;
-import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicIntegerArray;
-import java.util.concurrent.atomic.AtomicLong;
 import sun.misc.Unsafe;
 
-import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import sun.nio.ch.FileChannelImpl;
-
+import java.nio.file.Paths;
+import java.nio.file.Files;
 
 public class RTree {
 
@@ -32,8 +23,8 @@ public class RTree {
     private static final int DLSIZE = (LMhigh + 1) * 34;
     
     
-    private static final String storagePath = "./";
-//    private static final String storagePath = "/alidata1/race2019/data/";
+//    private static final String storagePath = "./";
+    private static final String storagePath = "/alidata1/race2019/data/";
 
     
     private static final Unsafe unsafe;
@@ -73,11 +64,13 @@ public class RTree {
 		long thePlBase;
 		long theDlBase;
 		try {
+			Files.deleteIfExists(Paths.get(PLFILE));
 			final RandomAccessFile plFile = new RandomAccessFile(PLFILE, "rw");
 			plFile.setLength(PLLEN);
 			final FileChannel plCh = plFile.getChannel();
 			thePlBase = (long) map0.invoke(plCh, 1, 0L, PLLEN);
 			
+			Files.deleteIfExists(Paths.get(DLFILE));
 			final RandomAccessFile dlFile = new RandomAccessFile(DLFILE, "rw");
 			dlFile.setLength(DLLEN);
 			final FileChannel dlCh = dlFile.getChannel();
