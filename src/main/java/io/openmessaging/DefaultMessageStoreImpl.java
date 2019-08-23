@@ -87,7 +87,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
 
     private static int MAXMSG = 2100000000;
-    private static int MAXSLICE = 1000;
+    private static int MAXSLICE = 2000;
     
     private static int nSlice = 1;
     private static long slicePivot[] = new long[MAXSLICE];
@@ -266,12 +266,20 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				RTree.finishInsert();
     				System.gc();
     				
+    				for (int i = 0; i < nSlice; i++) {
+    		    		NodeEntry r = sliceRoot[i];
+    		    		System.out.println(String.format("slice %d: pivot=%d tree=(%d,%d,%d,%d)(%d,%d)", i, slicePivot[i], r.left, r.right, r.bottom, r.top, r.sumA, r.cntA));
+    		    	}
+    				
 //    				firstFlag = true;
     				state = 2;
     			}
     		}
     	}
     	
+    	
+    	
+    	System.out.println("[" + new Date() + "]: " + String.format("queryData: %d %d %d %d", tMin, tMax, aMin, aMax));
     	
     	ArrayList<Message> result = new ArrayList<Message>();
     	
@@ -295,6 +303,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
+    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: %d %d %d %d", tMin, tMax, aMin, aMax));
+    	
     	AverageResult result = new AverageResult();
     	
     	for (int i = 0; i < nSlice; i++) {
