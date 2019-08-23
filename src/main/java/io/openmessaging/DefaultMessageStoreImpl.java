@@ -137,7 +137,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     
     
-    private static final int MAXBUFFER = 1000000;
+    private static final int MAXBUFFER = 200;
     private static class PutThreadLocalData {
     	Message[] buffer;
     	int bufptr;
