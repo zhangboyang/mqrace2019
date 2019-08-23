@@ -5,9 +5,11 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
@@ -82,22 +84,81 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
 
-
-
-    
-    private static final Object insertLock = new Object();
     private static int insCount = 0;
+
+    private static boolean insertDone = false;
     
-    private static Message[] msgBuffer = new Message[10000000];
-    private static int msgBufferPtr = 0;
-    
-    private static void flushMsgBuffer()
+    private static void flushInsertQueue()
     {
-    	for (int i = 0; i < msgBufferPtr; i++) {
-			RTree.insert(msgBuffer[i]);
+    	insertDone = true;
+    	int nThread = putThreadCount.get();
+    	try {
+	    	for (int i = 0; i < nThread; i++) {
+	    		insertQueue.put(putTLD[i].buffer);
+	    		putTLD[i] = null;
+	    	}
+	    } catch (InterruptedException e) {
+			e.printStackTrace();
+			System.exit(-1);
 		}
-		msgBufferPtr = 0;
     }
+    private static void insertProc()
+    {
+    	System.out.println("[" + new Date() + "]: sort started");
+    	
+    	try {
+	    	do {
+	    		Message[] buffer = insertQueue.take();
+	    		for (int i = 0; i < buffer.length; i++) {
+	    			if (buffer[i] != null) {
+	    				
+	    				RTree.insert(buffer[i]);
+	    				if (insCount % 1000000 == 0) {
+	    					System.out.println(String.format("ins %d: %s", insCount, dumpMessage(buffer[i])));
+	    				}
+	    				insCount++;
+	    			}
+	    		}
+	    	} while (!insertDone || !insertQueue.isEmpty());
+	    } catch (InterruptedException e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
+    	
+    	System.out.println("[" + new Date() + "]: sort finished");
+    }
+
+    
+    private static final int MAXTHREAD = 100;
+    private static final int MAXQUEUE = 1000;
+    
+    private static final ArrayBlockingQueue<Message[]> insertQueue = new ArrayBlockingQueue<Message[]>(MAXQUEUE);
+    
+
+    
+    
+    private static final int MAXBUFFER = 1000;
+    private static class PutThreadLocalData {
+    	Message[] buffer;
+    	int bufptr;
+    	
+    	void clear() {
+    		buffer = new Message[MAXBUFFER];
+    		bufptr = 0;
+    	}
+    }
+    private static final PutThreadLocalData putTLD[] = new PutThreadLocalData[MAXTHREAD];
+    private static final AtomicInteger putThreadCount = new AtomicInteger();
+    private static final ThreadLocal<PutThreadLocalData> putBuffer = new ThreadLocal<PutThreadLocalData>() {
+        @Override protected PutThreadLocalData initialValue() {
+        	PutThreadLocalData pd = new PutThreadLocalData();
+        	putTLD[putThreadCount.getAndIncrement()] = pd;
+        	pd.clear();
+        	return pd;
+        }
+    };
+
+    private static Thread sortThread;
     
     @Override
     public void put(Message message) {
@@ -106,25 +167,34 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		synchronized (stateLock) {
     			if (state == 0) {
 					System.out.println("[" + new Date() + "]: put() started");
+					sortThread = new Thread() {
+					    public void run() {
+					    	try {
+								Thread.sleep(3000);
+							} catch (InterruptedException e) {
+								e.printStackTrace();
+								System.exit(-1);
+							}
+					    	insertProc();
+					    }
+					};
+					sortThread.start();
 					state = 1;
     			}
     		}
     	}
-    
-    	synchronized (insertLock) {
-    		msgBuffer[msgBufferPtr++] = message;
-    		
-			if (insCount % 1000000 == 0) {
-				System.out.println(String.format("insert %d: %s", insCount, dumpMessage(message)));
-			}
-			insCount++;
-			
-    		if (msgBufferPtr == msgBuffer.length) {
-    			flushMsgBuffer();
-    			
-    		}
-    	}
     	
+    	try {
+    		PutThreadLocalData pd = putBuffer.get();
+			pd.buffer[pd.bufptr++] = message;
+			if (pd.bufptr == pd.buffer.length) {
+				insertQueue.put(pd.buffer);
+				pd.clear();
+			}
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
     }
     
     @Override
@@ -137,8 +207,15 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			if (state == 1) {
     				System.out.println("[" + new Date() + "]: getMessage() started");
     				
-    				flushMsgBuffer();
-    				msgBuffer = null;
+    				flushInsertQueue();
+    				
+    				try {
+						sortThread.join();
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+						System.exit(-1);
+					}
+    				
     				System.out.println(String.format("total=%d", insCount));
     				RTree.finishInsert();
     				System.gc();
