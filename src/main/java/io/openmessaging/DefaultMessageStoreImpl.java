@@ -114,7 +114,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	    				
 	    				RTree.insert(buffer[i]);
 	    				if (insCount % 1000000 == 0) {
-	    					System.out.println("[" + new Date() + "]: " + String.format("ins %d: %s", insCount, dumpMessage(buffer[i])));
+	    					System.out.println("[" + new Date() + "]: " + String.format("ins %d (height %d): %s", insCount, RTree.treeHeight, dumpMessage(buffer[i])));
 	    				}
 	    				insCount++;
 	    			}
@@ -137,7 +137,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     
     
-    private static final int MAXBUFFER = 200;
+    private static final int MAXBUFFER = 100;
     private static class PutThreadLocalData {
     	Message[] buffer;
     	int bufptr;

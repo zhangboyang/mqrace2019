@@ -130,8 +130,8 @@ public class RTree {
     private static long getBT(Message data) { return data.getA(); }
     
     
-    private static final int Mhigh = 15;
-    private static final int Mlow = 6;
+    private static final int Mhigh = 5;
+    private static final int Mlow = 2;
     private static final int maxK = Mhigh - 2 * Mlow + 2;
     
     private static class NodeEntry { // R-tree Node Entry
@@ -490,6 +490,7 @@ public class RTree {
     	return null;
     }
     
+    public static int treeHeight = 0;
     public static NodeEntry insertToTree(NodeEntry root, Message data)
     {
     	NodeEntry oldRoot = root;
@@ -497,6 +498,7 @@ public class RTree {
     	if (newNode == null) {
     		return oldRoot;
     	} else {
+    		treeHeight++;
     		NodeEntry newRoot = new NodeEntry();
     		
     		newRoot.treeptr = allocTreeNode();
