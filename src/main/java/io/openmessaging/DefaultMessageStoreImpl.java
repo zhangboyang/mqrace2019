@@ -15,6 +15,8 @@ import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
+import io.openmessaging.RTree.AverageResult;
+import io.openmessaging.RTree.NodeEntry;
 import sun.misc.Unsafe;
 
 import java.io.FileNotFoundException;
@@ -84,6 +86,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
 
+    private static int MAXMSG = 2100000000;
+    private static int MAXSLICE = 1000;
+    
+    private static int nSlice = 1;
+    private static long slicePivot[] = new long[MAXSLICE];
+    private static NodeEntry sliceRoot[] = new NodeEntry[MAXSLICE];
+    
+    static {
+    	for (int i = 0; i < MAXSLICE; i++) {
+    		sliceRoot[i] = RTree.allocRootNode();
+    	}
+    }
     private static int insCount = 0;
 
     private static boolean insertDone = false;
@@ -107,16 +121,41 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	System.out.println("[" + new Date() + "]: insert thread started");
     	
     	try {
+    		long maxT = Long.MIN_VALUE;
+    		
 	    	do {
 	    		Message[] buffer = insertQueue.take();
 	    		for (int i = 0; i < buffer.length; i++) {
 	    			if (buffer[i] != null) {
 	    				
-	    				RTree.insert(buffer[i]);
 	    				if (insCount % 1000000 == 0) {
-	    					System.out.println("[" + new Date() + "]: " + String.format("ins %d (height %d): %s", insCount, RTree.treeHeight, dumpMessage(buffer[i])));
+	    					System.out.println("[" + new Date() + "]: " + String.format("ins %d: %s", insCount, dumpMessage(buffer[i])));
 	    				}
+	    				
+	    				long t = buffer[i].getT();
+	    				maxT = Math.max(maxT, t);
+	    				
+	    				
 	    				insCount++;
+	    				if (insCount % (MAXMSG / MAXSLICE) == 0) {
+	    					slicePivot[nSlice++] = maxT;
+	    				}
+	    				
+	    				int l = 0, r = nSlice;
+	    				while (r - l > 1) {
+	    					int m = (l + r) / 2;
+	    					if (t >= slicePivot[m]) {
+	    						l = m;
+	    					} else {
+	    						r = m;
+	    					}
+	    				}
+	    				
+	    				assert t >= slicePivot[l];
+	    				assert r == nSlice || t < slicePivot[r];
+	    				
+	    				sliceRoot[l] = RTree.insertToTree(sliceRoot[l], buffer[i]);
+
 	    			}
 	    		}
 	    	} while (!insertDone || !insertQueue.isEmpty());
@@ -167,6 +206,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		synchronized (stateLock) {
     			if (state == 0) {
 					System.out.println("[" + new Date() + "]: put() started");
+					
+					boolean assertsEnabled = false;
+					assert assertsEnabled = true;
+					
+					System.out.println("assertEnabled=" + assertsEnabled);
+					
+					
 					sortThread = new Thread() {
 					    public void run() {
 					    	try {
@@ -228,7 +274,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	
     	ArrayList<Message> result = new ArrayList<Message>();
-    	RTree.queryData(result, tMin, tMax, aMin, aMax);
+    	
+    	for (int i = 0; i < nSlice; i++) {
+    		RTree.queryData(sliceRoot[i], result, tMin, tMax, aMin, aMax);
+    	}
 
     	doSortMessage(result);
     	
@@ -246,6 +295,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
-    	return RTree.queryAverage(tMin, tMax, aMin, aMax);
+    	AverageResult result = new AverageResult();
+    	
+    	for (int i = 0; i < nSlice; i++) {
+    		RTree.queryAverage(sliceRoot[i], result, tMin, tMax, aMin, aMax);
+    	}
+    	return result.cnt > 0 ? result.sum / result.cnt : 0;
     }
 }

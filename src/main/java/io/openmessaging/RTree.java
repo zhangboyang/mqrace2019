@@ -130,11 +130,11 @@ public class RTree {
     private static long getBT(Message data) { return data.getA(); }
     
     
-    private static final int Mhigh = 5;
-    private static final int Mlow = 2;
+    private static final int Mhigh = 15;
+    private static final int Mlow = 6;
     private static final int maxK = Mhigh - 2 * Mlow + 2;
     
-    private static class NodeEntry { // R-tree Node Entry
+    public static class NodeEntry { // R-tree Node Entry
     	NodeEntry[] treeptr;
     	int leafptr;
     	
@@ -212,10 +212,15 @@ public class RTree {
     }
     private static NodeEntry treeRoot;
     static {
-    	treeRoot = new NodeEntry();
-    	treeRoot.leafptr = allocLeafNode();
+    	treeRoot = allocRootNode();
     }
     
+    public static NodeEntry allocRootNode()
+    {
+    	NodeEntry root = new NodeEntry();
+    	root.leafptr = allocLeafNode();
+    	return root;
+    }
     private static NodeEntry[] allocTreeNode()
     {
     	treeNodeCount++;
@@ -490,7 +495,6 @@ public class RTree {
     	return null;
     }
     
-    public static int treeHeight = 0;
     public static NodeEntry insertToTree(NodeEntry root, Message data)
     {
     	NodeEntry oldRoot = root;
@@ -498,7 +502,6 @@ public class RTree {
     	if (newNode == null) {
     		return oldRoot;
     	} else {
-    		treeHeight++;
     		NodeEntry newRoot = new NodeEntry();
     		
     		newRoot.treeptr = allocTreeNode();
@@ -530,7 +533,7 @@ public class RTree {
     
     //////////////////////////////////////////////////////////////////////////////////////////////
     
-    private static void queryData(NodeEntry root, ArrayList<Message> result, long left, long right, long bottom, long top)
+    public static void queryData(NodeEntry root, ArrayList<Message> result, long left, long right, long bottom, long top)
     {
     	if (root.treeptr == null) {
     		long pointLeaf = getPointLeaf(root.leafptr);
@@ -579,12 +582,12 @@ public class RTree {
     
     //////////////////////////////////////////////////////////////////////////////////////////////
     
-    private static class AverageResult {
+    public static class AverageResult {
     	long sum;
     	int cnt;
     }
     
-    private static void queryAverage(NodeEntry root, AverageResult result, long left, long right, long bottom, long top)
+    public static void queryAverage(NodeEntry root, AverageResult result, long left, long right, long bottom, long top)
     {
     	if (root.treeptr == null) {
         	long pointLeaf = getPointLeaf(root.leafptr);
