@@ -6,8 +6,117 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Date;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
+import java.util.concurrent.atomic.AtomicLong;
+import sun.misc.Unsafe;
+
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import sun.nio.ch.FileChannelImpl;
+
 
 public class RTree {
+
+    private static final int LMhigh = 255;
+    private static final int LMlow = 100;
+    
+    private static final int PLSIZE = (LMhigh + 1) * 16;
+    private static final int DLSIZE = (LMhigh + 1) * 34;
+    
+    
+    private static final String storagePath = "./";
+//    private static final String storagePath = "/alidata1/race2019/data/";
+
+    
+    private static final Unsafe unsafe;
+    private static final Method map0;
+    
+    private static final String PLFILE = storagePath + "index.ta.data"; 
+    private static final String DLFILE = storagePath + "index.body.data";
+    
+    private static final int MAXLEAF = 20000000;
+
+    private static final long PLLEN = (((long)PLSIZE * MAXLEAF - 1) / 4096 + 1) * 4096;
+    private static final long DLLEN = (((long)DLSIZE * MAXLEAF - 1) / 4096 + 1) * 4096;
+    
+    private static final long plBase;
+    private static final long dlBase;
+    
+    static {
+        Unsafe theUnsafe;
+        try {
+            Field f = Unsafe.class.getDeclaredField("theUnsafe");
+            f.setAccessible(true);
+            theUnsafe = (Unsafe) f.get(null);
+        } catch (Exception e) {
+            theUnsafe = null;
+        }
+        unsafe = theUnsafe;
+        
+        Method theMap0;
+        try {
+        	theMap0 = FileChannelImpl.class.getDeclaredMethod("map0", int.class, long.class, long.class);
+        	theMap0.setAccessible(true);
+        } catch (Exception e) {
+        	theMap0 = null;
+        }
+        map0 = theMap0;
+        
+		long thePlBase;
+		long theDlBase;
+		try {
+			final RandomAccessFile plFile = new RandomAccessFile(PLFILE, "rw");
+			plFile.setLength(PLLEN);
+			final FileChannel plCh = plFile.getChannel();
+			thePlBase = (long) map0.invoke(plCh, 1, 0L, PLLEN);
+			
+			final RandomAccessFile dlFile = new RandomAccessFile(DLFILE, "rw");
+			dlFile.setLength(DLLEN);
+			final FileChannel dlCh = dlFile.getChannel();
+			theDlBase = (long) map0.invoke(dlCh, 1, 0L, DLLEN);
+		} catch (Exception e) {
+			e.printStackTrace();
+			thePlBase = 0;
+			theDlBase = 0;
+			System.exit(-1);
+		}
+		plBase = thePlBase;
+		dlBase = theDlBase;
+    }
+    
+	private static long getPointLeaf(int leafId)
+	{
+		if (leafId >= MAXLEAF) {
+			System.out.println("POINT-LEAF: OUT OF MEMORY!");
+			System.exit(-1);
+		}
+		return plBase + (long)leafId * PLSIZE; 
+	}
+	
+	private static long getDataLeaf(int leafId)
+	{
+		if (leafId >= MAXLEAF) {
+			System.out.println("DATA-LEAF: OUT OF MEMORY!");
+			System.exit(-1);
+		}
+		return dlBase + (long)leafId * DLSIZE; 
+	}
+	
+	private static void doneLeaf(int leafId)
+	{
+	}
+	
+	
+	
+	
 	
 	private static boolean rectOverlap(long aLeft, long aRight, long aBottom, long aTop, long bLeft, long bRight, long bBottom, long bTop)
 	{
@@ -24,38 +133,9 @@ public class RTree {
 		return bLeft <= aLeft && aRight <= bRight && bBottom <= aBottom && aTop <= bTop;
 	}
 	
-	private static final int MAXLEAF = 1000000;
-	private static final ByteBuffer pointLeafArray[] = new ByteBuffer[MAXLEAF];
-	private static final ByteBuffer dataLeafArray[] = new ByteBuffer[MAXLEAF];
-	
-	private static ByteBuffer getPointLeaf(int leafId)
-	{
-		if (pointLeafArray[leafId] == null) {
-			pointLeafArray[leafId] = ByteBuffer.allocate((LMhigh + 1) * 16).order(ByteOrder.LITTLE_ENDIAN);
-		}
-		return pointLeafArray[leafId];
-	}
-	
-	private static ByteBuffer getDataLeaf(int leafId)
-	{
-		if (dataLeafArray[leafId] == null) {
-			dataLeafArray[leafId] = ByteBuffer.allocate((LMhigh + 1) * 34).order(ByteOrder.LITTLE_ENDIAN);
-		}
-		return dataLeafArray[leafId];
-	}
-	
-	private static void doneLeaf(int leafId)
-	{
-		//FIXME
-	}
-	
-	
     private static long getLR(Message data) { return data.getT(); }
     private static long getBT(Message data) { return data.getA(); }
     
-    
-    private static final int LMhigh = 256;
-    private static final int LMlow = 100;
     
     private static final int Mhigh = 15;
     private static final int Mlow = 6;
@@ -134,7 +214,7 @@ public class RTree {
     private static int treeNodeCount = 0;
     private static int allocLeafNode()
     {
-    	return ++leafNodeCount;
+    	return leafNodeCount++;
     }
     private static NodeEntry treeRoot;
     static {
@@ -154,13 +234,12 @@ public class RTree {
     	// 叶子节点的分裂：因为叶子节点里面都是点（不是矩形），所以采用简单的分裂方法，随机找一个轴，按中位数分成两半
     	int axisOffset = (leaf.leafptr % 2) * 8; // 直接用节点编号作随机数
     	
-    	ByteBuffer pointLeaf = getPointLeaf(leaf.leafptr);
-    	ByteBuffer dataLeaf = getDataLeaf(leaf.leafptr);
-    	dataLeaf.position(0);
+    	long pointLeaf = getPointLeaf(leaf.leafptr);
+    	long dataLeaf = getDataLeaf(leaf.leafptr);
     	
     	assert leaf.nchild == LMhigh + 1;
     	for (int i = 0; i <= LMhigh; i++) {
-    		leafTempArray[i] = pointLeaf.getLong(i * 16 + axisOffset);
+    		leafTempArray[i] = unsafe.getLong(pointLeaf + i * 16 + axisOffset);
     	}
     	Arrays.sort(leafTempArray);
     	long pivot = leafTempArray[(LMhigh + 1) / 2];
@@ -169,20 +248,21 @@ public class RTree {
     	leaf.nchild = 0;
     	NodeEntry newLeaf = new NodeEntry();
     	newLeaf.leafptr = allocLeafNode();
-    	ByteBuffer newPointLeaf = getPointLeaf(newLeaf.leafptr);
-    	ByteBuffer newDataLeaf = getDataLeaf(newLeaf.leafptr);
-    	newDataLeaf.position(0);
+    	long newPointLeaf = getPointLeaf(newLeaf.leafptr);
+    	long newDataLeaf = getDataLeaf(newLeaf.leafptr);
     	
     	int flag = 0;
     	for (int i = 0; i <= LMhigh; i++) {
-    		long cur = pointLeaf.getLong(i * 16 + axisOffset);
-    		long lr = pointLeaf.getLong(i * 16);
-    		long bt = pointLeaf.getLong(i * 16 + 8);
+    		long cur = unsafe.getLong(pointLeaf + i * 16 + axisOffset);
+    		long lr = unsafe.getLong(pointLeaf + i * 16);
+    		long bt = unsafe.getLong(pointLeaf + i * 16 + 8);
     		
     		if (cur < pivot || (cur == pivot && (flag++) % 2 == 0)) {
-    			pointLeaf.putLong(leaf.nchild * 16, lr);
-    			pointLeaf.putLong(leaf.nchild * 16 + 8, bt);
-    			dataLeaf.put(dataLeaf.array(), i * 34, 34);
+    			if (leaf.nchild != i) {
+    				unsafe.putLong(pointLeaf + leaf.nchild * 16, lr);
+    				unsafe.putLong(pointLeaf + leaf.nchild * 16 + 8, bt);
+    				unsafe.copyMemory(null, dataLeaf + i * 34, null, dataLeaf + leaf.nchild * 34, 34);
+    			}
     			leaf.nchild++;
     			if (leaf.nchild == 1) {
     				leaf.sumA = bt;
@@ -196,9 +276,9 @@ public class RTree {
     				leaf.top = Math.max(leaf.top, bt);
     			}
     		} else {
-    			newPointLeaf.putLong(newLeaf.nchild * 16, lr);
-    			newPointLeaf.putLong(newLeaf.nchild * 16 + 8, bt);
-    			newDataLeaf.put(dataLeaf.array(), i * 34, 34);
+    			unsafe.putLong(newPointLeaf + newLeaf.nchild * 16, lr);
+    			unsafe.putLong(newPointLeaf + newLeaf.nchild * 16 + 8, bt);
+    			unsafe.copyMemory(null, dataLeaf + i * 34, null, newDataLeaf + newLeaf.nchild * 34, 34);
     			newLeaf.nchild++;
     			if (newLeaf.nchild == 1) {
     				newLeaf.sumA = bt;
@@ -346,13 +426,12 @@ public class RTree {
     
     private static NodeEntry leafInsert(NodeEntry leaf, Message data)
     {
-    	ByteBuffer pointLeaf = getPointLeaf(leaf.leafptr);
-    	pointLeaf.putLong(leaf.nchild * 16, getLR(data));
-    	pointLeaf.putLong(leaf.nchild * 16 + 8, getBT(data));
+    	long pointLeaf = getPointLeaf(leaf.leafptr);
+    	unsafe.putLong(pointLeaf + leaf.nchild * 16, getLR(data));
+    	unsafe.putLong(pointLeaf + leaf.nchild * 16 + 8, getBT(data));
     	
-    	ByteBuffer dataLeaf = getDataLeaf(leaf.leafptr);
-    	dataLeaf.position(leaf.nchild * 34);
-    	dataLeaf.put(data.getBody());
+    	long dataLeaf = getDataLeaf(leaf.leafptr);
+    	unsafe.copyMemory(data.getBody(), unsafe.ARRAY_BYTE_BASE_OFFSET, null, dataLeaf + leaf.nchild * 34, 34);
     	
     	doneLeaf(leaf.leafptr);
     	
@@ -454,16 +533,16 @@ public class RTree {
     private static void queryData(NodeEntry root, ArrayList<Message> result, long left, long right, long bottom, long top)
     {
     	if (root.treeptr == null) {
-        	ByteBuffer pointLeaf = getPointLeaf(root.leafptr);
-        	ByteBuffer dataLeaf = getDataLeaf(root.leafptr);
+        	long pointLeaf = getPointLeaf(root.leafptr);
+        	long dataLeaf = getDataLeaf(root.leafptr);
         	
     		for (int i = 0; i < root.nchild; i++) {
-            	long lr = pointLeaf.getLong(i * 16);
-            	long bt = pointLeaf.getLong(i * 16 + 8);
+            	long lr = unsafe.getLong(pointLeaf + i * 16);
+            	long bt = unsafe.getLong(pointLeaf + i * 16 + 8);
             	if (pointInRect(lr, bt, left, right, bottom, top)) {
             		byte body[] = new byte[34];
-            		System.arraycopy(dataLeaf.array(), i * 34, body, 0, body.length);
-            		result.add(new Message(bt, lr, body)); 
+            		unsafe.copyMemory(null, dataLeaf + i * 34, body, unsafe.ARRAY_BYTE_BASE_OFFSET, body.length);
+            		result.add(new Message(bt, lr, body));
             	}
     		}
     		
@@ -508,11 +587,11 @@ public class RTree {
     private static void queryAverage(NodeEntry root, AverageResult result, long left, long right, long bottom, long top)
     {
     	if (root.treeptr == null) {
-        	ByteBuffer pointLeaf = getPointLeaf(root.leafptr);
+        	long pointLeaf = getPointLeaf(root.leafptr);
         	
     		for (int i = 0; i < root.nchild; i++) {
-            	long lr = pointLeaf.getLong(i * 16);
-            	long bt = pointLeaf.getLong(i * 16 + 8);
+            	long lr = unsafe.getLong(pointLeaf + i * 16);
+            	long bt = unsafe.getLong(pointLeaf + i * 16 + 8);
             	if (pointInRect(lr, bt, left, right, bottom, top)) {
             		result.sum += bt;
             		result.cnt++;

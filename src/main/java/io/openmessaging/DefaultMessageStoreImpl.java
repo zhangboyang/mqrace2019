@@ -82,13 +82,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
 
-    private static final String storagePath = "./";
-//    private static final String storagePath = "/alidata1/race2019/data/";
-
 
 
     
     private static final Object insertLock = new Object();
+    private static int insCount = 0;
     
     @Override
     public void put(Message message) {
@@ -101,13 +99,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			}
     		}
     	}
-    	
-    	if (ThreadLocalRandom.current().nextInt(210000) == 0) {
-    		System.out.println(dumpMessage(message));
-    	}
-    	
+    
     	synchronized (insertLock) {
 			RTree.insert(message);
+			
+			if (insCount % 1000000 == 0) {
+				System.out.println(String.format("insert %d: %s", insCount, dumpMessage(message)));
+			}
+			insCount++;
     	}
     	
     }
