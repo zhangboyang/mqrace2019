@@ -56,6 +56,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	static {
     	//printFile("/proc/cpuinfo");
     	printFile("/proc/meminfo");
+    	System.out.println("Working Directory = " + System.getProperty("user.dir"));
 	}
 	
 	private static String dumpMessage(Message message)
@@ -86,8 +87,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	});
     }
     
-    private static final String storagePath = "./";
-//    private static final String storagePath = "/alidata1/race2019/data/";
+//    private static final String storagePath = "./";
+    private static final String storagePath = "/alidata1/race2019/data/";
     
     private static final String tAxisPointFile = storagePath + "tAxis.point.data";
     private static final String tAxisBodyFile = storagePath + "tAxis.body.data";
@@ -624,6 +625,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		Collections.sort(result, tComparator);
 
+		System.out.println("[" + new Date() + "]: " + String.format("queryData: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.size()));
+    	
+		
+		
 //    	//为最后的查询平均值预热JVM
 //    	getAvgValue(aMin, aMax, tMin, tMax);
 //    	if (firstFlag) {
@@ -631,7 +636,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    			getAvgValue(aMin, aMax, tMin, tMax);
 //    		}
 //    	}
-    	
+		
+		
 
     	return result;
     }
