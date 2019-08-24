@@ -137,8 +137,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
 
     private static final int MAXMSG = 2100000000;
-    private static final int N_TSLICE = 5000;
-    private static final int N_ASLICE = 1000;
+    private static final int N_TSLICE = 200000;
+    private static final int N_ASLICE = 100;
     
     private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
     
@@ -196,7 +196,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
-    private static Message writeBuffer[] = new Message[1024];
+    private static Message writeBuffer[] = new Message[1048576];
     private static int writeBufferPtr = 0;
     private static void putWriteBuffer(Message m)
     {
@@ -213,7 +213,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     
-    private static final int READBUFSZ = 10240;
+    private static final int READBUFSZ = 512;
     
     private static final int readPtr[] = new int[N_TSLICE];
     
@@ -720,6 +720,47 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	return result;
     }
 
+    
+    
+    private static class AverageResult {
+    	long sum = 0;
+    	int cnt = 0;
+    }
+    
+    private static void queryAverageAxisT(AverageResult result, int tSliceId, int aSliceLow, int aSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
+    {
+		int baseOffset = blockOffsetTableAxisT[tSliceId][aSliceLow];
+		int nRecord = blockOffsetTableAxisT[tSliceId][aSliceHigh] + blockCountTable[tSliceId][aSliceHigh] - baseOffset;
+		
+		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
+		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+		tAxisChannel.read(pointBuffer, (long)baseOffset * 16);
+		pointBuffer.position(0);
+		LongBuffer pointBufferL = pointBuffer.asLongBuffer();
+		
+		for (int i = 0; i < nRecord; i++) {
+			long t = pointBufferL.get();
+			long a = pointBufferL.get();
+			
+			if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
+				result.sum += a;
+				result.cnt++;
+			}
+		}
+    }
+    
+    
+    private static void queryAverageAxisA(AverageResult result, int aSliceLow, int aSliceHigh, int tSliceLow, int tSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
+    {
+    	int baseOffsetLow = blockOffsetTableAxisA[tSliceLow][aSliceLow];
+		int nRecordLow = blockOffsetTableAxisA[tSliceLow][aSliceHigh] + blockCountTable[tSliceLow][aSliceHigh] - baseOffsetLow;
+		
+		int baseOffsetHigh = blockOffsetTableAxisT[tSliceHigh][aSliceLow];
+		int nRecordHigh = blockOffsetTableAxisT[tSliceHigh][aSliceHigh] + blockCountTable[tSliceHigh][aSliceHigh] - baseOffsetHigh;
+		
+		
+    }
+    
 
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
@@ -728,9 +769,33 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int tSliceHigh = findSliceT(tMax);
     	int aSliceLow = findSliceA(aMin);
     	int aSliceHigh = findSliceA(aMax);
+
+    	AverageResult result = new AverageResult();
+    	
+//    	try {
+//	    	if (tSliceLow == tSliceHigh) {
+//	    		// 在同一个t块内，只能暴力
+//	    		queryAverageAxisT(result, tSliceLow, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+//	    		
+//	    	} else {
+//	    		queryAverageAxisT(result, tSliceLow, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+//	    		queryAverageAxisT(result, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+//	    		tSliceLow++;
+//	    		tSliceHigh--;
+//	    		if (tSliceLow <= tSliceHigh) {
+//	    			queryAverageAxisA(result, aSliceLow, aSliceHigh, tSliceLow, tSliceHigh, tMin, tMax, aMin, aMax);
+//	    		}
+//	    	}
+//	    	
+//		} catch (IOException e) {
+//			e.printStackTrace();
+//			System.exit(-1);
+//		}
+    	
+    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.cnt));
     	
     	
-    	return 0;
+    	return result.cnt == 0 ? 0 : result.sum / result.cnt;
     }
     
     private static void atShutdown()
