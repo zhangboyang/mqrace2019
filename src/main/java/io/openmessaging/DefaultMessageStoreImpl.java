@@ -196,7 +196,21 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
-    private static ArrayList<Message> writeBuffer = new ArrayList<Message>();
+    private static Message writeBuffer[] = new Message[1024];
+    private static int writeBufferPtr = 0;
+    private static void putWriteBuffer(Message m)
+    {
+    	writeBuffer[writeBufferPtr++] = m;
+    	if (writeBufferPtr == writeBuffer.length) {
+    		Message newBuffer[] = new Message[writeBuffer.length * 2];
+    		System.arraycopy(writeBuffer, 0, newBuffer, 0, writeBuffer.length);
+    		writeBuffer = newBuffer;
+    	}
+    }
+    private static void clearWriteBuffer()
+    {
+    	writeBufferPtr = 0;
+    }
     
     
     private static final int READBUFSZ = 10240;
@@ -249,7 +263,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     {
     	System.out.println("[" + new Date() + "]: build A-axis index start");
     	for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
-    		writeBuffer.clear();
+    		clearWriteBuffer();
+    		
 
     		long aLimit = aSlicePivot[aSliceId + 1];
     		
@@ -257,20 +272,20 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    			System.out.println(String.format("%d %d: %016X", aSliceId, tSliceId, peekFrontA(tSliceId)));
     			assert peekFrontA(tSliceId) >= aSlicePivot[aSliceId];
     			while (peekFrontA(tSliceId) < aLimit) {
-    				writeBuffer.add(getFront(tSliceId));
+    				putWriteBuffer(getFront(tSliceId));
     				blockCountTable[tSliceId][aSliceId]++;
     			}
     		}
     		
-    		Collections.sort(writeBuffer, tComparator);
+    		Arrays.parallelSort(writeBuffer, 0, writeBufferPtr, tComparator);
     		
-    		System.out.println(String.format("a-slice %d: pivot=%d limit=%d count=%d", aSliceId, aSlicePivot[aSliceId], aLimit, writeBuffer.size()));
+    		System.out.println(String.format("a-slice %d: pivot=%d limit=%d count=%d", aSliceId, aSlicePivot[aSliceId], aLimit, writeBufferPtr));
     		
-    		ByteBuffer pointBuffer = ByteBuffer.allocate(writeBuffer.size() * 16);
+    		ByteBuffer pointBuffer = ByteBuffer.allocate(writeBufferPtr * 16);
     		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
-    		for (int i = 0; i < writeBuffer.size(); i++) {
+    		for (int i = 0; i < writeBufferPtr; i++) {
     			aAxisWriteCount++;
-    			Message m = writeBuffer.get(i);
+    			Message m = writeBuffer[i];
     			pointBuffer.putLong(m.getT());
     			pointBuffer.putLong(m.getA());
     		}
@@ -337,25 +352,25 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     private static void flushWriteBuffer(long exclusiveT) throws IOException
     {
-		ByteBuffer pointBuffer = ByteBuffer.allocate(writeBuffer.size() * 16);
+		ByteBuffer pointBuffer = ByteBuffer.allocate(writeBufferPtr * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
-		ByteBuffer bodyBuffer = ByteBuffer.allocate(writeBuffer.size() * 34);
+		ByteBuffer bodyBuffer = ByteBuffer.allocate(writeBufferPtr * 34);
 		bodyBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		
 		
 //		System.out.println(String.format("flush=%d size=%d", tSliceCount - 1, writeBuffer.size()));
 		int nWrite;
-		for (nWrite = 0; nWrite < writeBuffer.size(); nWrite++) {
-			Message curMessage = writeBuffer.get(nWrite);
+		for (nWrite = 0; nWrite < writeBufferPtr; nWrite++) {
+			Message curMessage = writeBuffer[nWrite];
 			if (curMessage.getT() == exclusiveT) {
 				break;
 			}
 		}
 		
-		Collections.sort(writeBuffer.subList(0, nWrite), aComparator);
+		Arrays.sort(writeBuffer, 0, nWrite, aComparator);
 		
 		for (int i = 0; i < nWrite; i++) {
-			Message curMessage = writeBuffer.get(i);
+			Message curMessage = writeBuffer[i];
 			tAxisWriteCount++;
 			pointBuffer.putLong(curMessage.getT());
 			pointBuffer.putLong(curMessage.getA());
@@ -363,7 +378,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		}
 		
 		tSliceRecordCount[tSliceCount - 1] = nWrite;
-		writeBuffer.subList(0, nWrite).clear();
+		
+		System.arraycopy(writeBuffer, nWrite, writeBuffer, 0, writeBufferPtr - nWrite);
+		writeBufferPtr -= nWrite;
 		
 		// 送到写线程去写文件，这样可以排序和写文件同时进行，加快速度
 		WriteBufferPair bufferPair = new WriteBufferPair();
@@ -401,7 +418,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			//System.out.println(String.format("t-slice %d: pivot=%d", tSliceCount - 1, tSlicePivot[tSliceCount - 1]));
 		}
 		
-		writeBuffer.add(message);
+		putWriteBuffer(message);
 		
     	insCount++;
     	if (insCount % 1000000 == 0) {
@@ -413,7 +430,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     {
     	flushWriteBuffer(Long.MAX_VALUE);
     	tSlicePivot[tSliceCount] = Long.MAX_VALUE;
-    	assert writeBuffer.isEmpty();
+    	assert writeBufferPtr == 0;
     	
     	try {
     		writeFinished = true;
