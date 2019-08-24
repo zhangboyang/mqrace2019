@@ -88,21 +88,27 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final RandomAccessFile tAxisData;
     private static final RandomAccessFile tAxisBodyData;
+    private static final RandomAccessFile aAxisData;
     static {
-    	RandomAccessFile t, tb;
+    	RandomAccessFile t, tb, a;
     	try {
 			t = new RandomAccessFile(storagePath + "tAxis.point.data", "rw");
 			t.setLength(0);
 			tb = new RandomAccessFile(storagePath + "tAxis.body.data", "rw");
 			tb.setLength(0);
+			a = new RandomAccessFile(storagePath + "aAxis.point.data", "rw");
+			a.setLength(0);
+			
 		} catch (IOException e) {
 			t = null;
 			tb = null;
+			a = null;
 			e.printStackTrace();
 			System.exit(-1);
 		}
     	tAxisData = t;
     	tAxisBodyData = tb;
+    	aAxisData = a;
     }
     
 
@@ -118,18 +124,110 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static int tSliceRecordOffset[] = new int[N_TSLICE + 1];
     
     
-    private static int aSliceCount = 1;
     private static long aSlicePivot[] = new long[N_ASLICE + 1];
 
+    
+    private static final int blockCountTable[][] = new int[N_TSLICE][N_ASLICE];
+    private static final int blockOffsetTableAxisT[][] = new int[N_TSLICE][N_ASLICE];
+    private static final int blockOffsetTableAxisA[][] = new int[N_TSLICE][N_ASLICE];
+    
     private static int insCount = 0;
-    private static int writeCount = 0;
+    private static int tAxisWriteCount = 0;
+    private static int aAxisWriteCount = 0;
 
     
     private static long globalMaxA = Long.MIN_VALUE;
     private static long globalMinA = Long.MAX_VALUE;
     
     
+    
     private static ArrayList<Message> writeBuffer = new ArrayList<Message>();
+    
+    
+    private static final int READBUFSZ = 10240;
+    
+    private static final int readPtr[] = new int[N_TSLICE];
+    
+    private static final ByteBuffer readBuffer[] = new ByteBuffer[N_TSLICE];
+    private static final int readBufferPtr[] = new int[N_TSLICE];
+    private static final int readBufferCap[] = new int[N_TSLICE];
+    static {
+    	for (int i = 0; i < N_TSLICE; i++) {
+    		readBuffer[i] = ByteBuffer.allocate(READBUFSZ * 16);
+    		readBuffer[i].order(ByteOrder.LITTLE_ENDIAN);
+    	}
+    }
+    
+    private static boolean isReadBufferEmpty(int tSliceId)
+    {
+    	return readBufferPtr[tSliceId] >= readBufferCap[tSliceId];
+    }
+    private static void refillReadBuffer(int tSliceId) throws IOException
+    {
+    	if (isReadBufferEmpty(tSliceId)) {
+			int remainingCnt = tSliceRecordCount[tSliceId] - readPtr[tSliceId];
+			int readCnt = Math.min(remainingCnt, READBUFSZ);
+			
+			if (readCnt > 0) {
+	    		tAxisData.seek((long)(tSliceRecordOffset[tSliceId] + readPtr[tSliceId]) * 16);
+	    		tAxisData.read(readBuffer[tSliceId].array(), 0, readCnt * 16);
+	    		readPtr[tSliceId] += readCnt;
+	    		readBufferPtr[tSliceId] = 0;
+	    		readBufferCap[tSliceId] = readCnt;
+			}
+    	}
+    }
+    private static long peekFrontA(int tSliceId) throws IOException
+    {
+    	refillReadBuffer(tSliceId);
+    	return isReadBufferEmpty(tSliceId) ? Long.MAX_VALUE : readBuffer[tSliceId].getLong(readBufferPtr[tSliceId] * 16 + 8);
+    }
+    private static Message getFront(int tSliceId) throws IOException
+    {
+    	long a = readBuffer[tSliceId].getLong(readBufferPtr[tSliceId] * 16 + 8);
+    	long t = readBuffer[tSliceId].getLong(readBufferPtr[tSliceId] * 16);
+    	readBufferPtr[tSliceId]++;
+    	return new Message(a, t, null);
+    }
+    
+    private static void buildIndexAxisA() throws IOException
+    {
+    	System.out.println("[" + new Date() + "]: build A-axis index start");
+    	for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
+    		writeBuffer.clear();
+
+    		long aLimit = aSlicePivot[aSliceId + 1];
+    		
+    		for (int tSliceId = 0; tSliceId < tSliceCount; tSliceId++) {
+//    			System.out.println(String.format("%d %d: %016X", aSliceId, tSliceId, peekFrontA(tSliceId)));
+    			assert peekFrontA(tSliceId) >= aSlicePivot[aSliceId];
+    			while (peekFrontA(tSliceId) < aLimit) {
+    				writeBuffer.add(getFront(tSliceId));
+    				blockCountTable[tSliceId][aSliceId]++;
+    			}
+    		}
+    		
+    		Collections.sort(writeBuffer, tComparator);
+    		
+    		System.out.println(String.format("a-slice %d: pivot=%d limit=%d count=%d", aSliceId, aSlicePivot[aSliceId], aLimit, writeBuffer.size()));
+    		
+    		ByteBuffer pointBuffer = ByteBuffer.allocate(writeBuffer.size() * 16);
+    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+    		for (int i = 0; i < writeBuffer.size(); i++) {
+    			aAxisWriteCount++;
+    			Message m = writeBuffer.get(i);
+    			pointBuffer.putLong(m.getT());
+    			pointBuffer.putLong(m.getA());
+    		}
+    		aAxisData.write(pointBuffer.array());
+    	}
+    	System.out.println("[" + new Date() + "]: build A-axis index finished");
+    }
+    
+    
+    
+    
+    
 
     private static void flushWriteBuffer(long exclusiveT) throws IOException
     {
@@ -138,15 +236,21 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		ByteBuffer bodyBuffer = ByteBuffer.allocate(writeBuffer.size() * 34);
 		bodyBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		
+		
+//		System.out.println(String.format("flush=%d size=%d", tSliceCount - 1, writeBuffer.size()));
 		int nWrite;
 		for (nWrite = 0; nWrite < writeBuffer.size(); nWrite++) {
 			Message curMessage = writeBuffer.get(nWrite);
 			if (curMessage.getT() == exclusiveT) {
 				break;
 			}
-			
-			writeCount++;
-			
+		}
+		
+		Collections.sort(writeBuffer.subList(0, nWrite), aComparator);
+		
+		for (int i = 0; i < nWrite; i++) {
+			Message curMessage = writeBuffer.get(i);
+			tAxisWriteCount++;
 			pointBuffer.putLong(curMessage.getT());
 			pointBuffer.putLong(curMessage.getA());
 			bodyBuffer.put(curMessage.getBody());
@@ -155,7 +259,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		tSliceRecordCount[tSliceCount - 1] = nWrite;
 		writeBuffer.subList(0, nWrite).clear();
 		
-		tAxisData.write(pointBuffer.array(), 0, nWrite * 16);
+		tAxisData.write(pointBuffer.array(), 0, nWrite * 16);  // 此处可以异步写来改进性能
 		tAxisBodyData.write(bodyBuffer.array(), 0, nWrite * 34);
     }
     
@@ -167,6 +271,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    	}
 //    	lastMessage = message;
     	
+    	
     	long curA = message.getA();
     	globalMinA = Math.min(globalMinA, curA);
     	globalMaxA = Math.max(globalMaxA, curA);
@@ -174,7 +279,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		long curT = message.getT();
 		
 		if (insCount % TSLICE_INTERVAL == 0) {
-			if (tSliceCount > 0) {
+			if (insCount > 0) {
 				flushWriteBuffer(curT);
 			}
 			tSlicePivot[tSliceCount++] = curT;
@@ -191,14 +296,26 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static void postInsertProcess() throws IOException
     {
-    	flushWriteBuffer(Long.MIN_VALUE);
+    	flushWriteBuffer(Long.MAX_VALUE);
+    	tSlicePivot[tSliceCount] = Long.MAX_VALUE;
+    	assert writeBuffer.isEmpty();
     	
+    	// 计算各个块在文件中的偏移
     	for (int i = 0; i < tSliceCount; i++) {
     		if (i > 0) {
-    			tSliceRecordOffset[i] = tSliceRecordOffset[i - 1] + tSliceRecordCount[i];
+    			tSliceRecordOffset[i] = tSliceRecordOffset[i - 1] + tSliceRecordCount[i - 1];
     		}
     		System.out.println(String.format("t-slice %d: pivot=%d count=%d offset=%d", i, tSlicePivot[i], tSliceRecordCount[i], tSliceRecordOffset[i]));
     	}
+    	
+    	// 计算a轴上的分割点
+    	for (int i = 0; i < N_ASLICE; i++) {
+    		aSlicePivot[i] = globalMinA + (globalMaxA - globalMinA) / N_ASLICE * i;
+    	}
+    	aSlicePivot[N_ASLICE] = Long.MAX_VALUE;
+    	
+    	// 建立a轴上的索引
+    	buildIndexAxisA();
     }
 
     private static volatile boolean putFinished = false;
@@ -366,8 +483,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 					}
     				
     				System.out.println(String.format("insCount=%d", insCount));
-    				System.out.println(String.format("writeCount=%d", writeCount));
-    				
+    				System.out.println(String.format("tAxisWriteCount=%d", tAxisWriteCount));
+    				System.out.println(String.format("aAxisWriteCount=%d", aAxisWriteCount));
     				System.out.println(String.format("globalMinA=%d", globalMinA));
     				System.out.println(String.format("globalMaxA=%d", globalMaxA));
     				
