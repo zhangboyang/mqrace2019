@@ -168,23 +168,29 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static int findSliceT(long tValue)
     {
-    	for (int i = 0; i < tSliceCount; i++) {
-    		if (tSlicePivot[i] <= tValue && tValue < tSlicePivot[i + 1]) {
-    			return i;
-    		}
-    	}
-    	assert false;
-    	return -1;
+		int l = 0, r = tSliceCount;
+		while (r - l > 1) {
+			int m = (l + r) / 2;
+			if (tValue >= tSlicePivot[m]) {
+				l = m;
+			} else {
+				r = m;
+			}
+		}
+		return l;
     }
     private static int findSliceA(long aValue)
     {
-    	for (int i = 0; i < N_ASLICE; i++) {
-    		if (aSlicePivot[i] <= aValue && aValue < aSlicePivot[i + 1]) {
-    			return i;
-    		}
-    	}
-    	assert false;
-    	return -1;
+		int l = 0, r = N_ASLICE;
+		while (r - l > 1) {
+			int m = (l + r) / 2;
+			if (aValue >= aSlicePivot[m]) {
+				l = m;
+			} else {
+				r = m;
+			}
+		}
+		return l;
     }
     
     
@@ -298,6 +304,35 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
+    private static class WriteBufferPair {
+    	ByteBuffer pointBuffer;
+    	ByteBuffer bodyBuffer;
+    	int nWrite;
+    }
+    
+    private static final ArrayBlockingQueue<WriteBufferPair> writeQueue = new ArrayBlockingQueue<WriteBufferPair>(10);
+    private static volatile boolean writeFinished = false;
+    private static void writeThreadProc()
+    {
+    	System.out.println("[" + new Date() + "]: write thread start");
+		try {
+	    	while (!writeFinished) {
+	    		WriteBufferPair bufferPair = writeQueue.poll(1, TimeUnit.SECONDS);
+	    		
+	    		if (bufferPair != null) {
+	    			tAxisData.write(bufferPair.pointBuffer.array(), 0, bufferPair.nWrite * 16);
+	    			tAxisBodyData.write(bufferPair.bodyBuffer.array(), 0, bufferPair.nWrite * 34);
+	    		}
+	    	}
+			
+		} catch (IOException | InterruptedException e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
+
+    	
+    	System.out.println("[" + new Date() + "]: write thread finished");
+    }
     
 
     private static void flushWriteBuffer(long exclusiveT) throws IOException
@@ -330,8 +365,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		tSliceRecordCount[tSliceCount - 1] = nWrite;
 		writeBuffer.subList(0, nWrite).clear();
 		
-		tAxisData.write(pointBuffer.array(), 0, nWrite * 16);  // 此处可以异步写来改进性能
-		tAxisBodyData.write(bodyBuffer.array(), 0, nWrite * 34);
+		// 送到写线程去写文件，这样可以排序和写文件同时进行，加快速度
+		WriteBufferPair bufferPair = new WriteBufferPair();
+		bufferPair.pointBuffer = pointBuffer;
+		bufferPair.bodyBuffer = bodyBuffer;
+		bufferPair.nWrite = nWrite;
+		try {
+			writeQueue.put(bufferPair);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
     }
     
 //    private static Message lastMessage = null;
@@ -371,6 +415,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	tSlicePivot[tSliceCount] = Long.MAX_VALUE;
     	assert writeBuffer.isEmpty();
     	
+    	try {
+    		writeFinished = true;
+			writeThread.join();
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
+    	
     	// 计算各个块在文件中的偏移
     	for (int i = 0; i < tSliceCount; i++) {
     		if (i > 0) {
@@ -402,6 +454,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
     {
     	System.out.println("[" + new Date() + "]: sort thread started");
     	
+		writeThread = new Thread() {
+		    public void run() {
+		    	writeThreadProc();
+		    }
+		};
+		writeThread.start();
+		
     	int nThread = putThreadCount.get();
     	
     	Message buffer[][] = new Message[nThread][];
@@ -498,6 +557,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     };
 
     private static Thread sortThread;
+    private static Thread writeThread;
     
     @Override
     public void put(Message message) {
@@ -525,6 +585,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 					    }
 					};
 					sortThread.start();
+					
 					state = 1;
     			}
     		}
@@ -645,6 +706,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
+    	
+    	int tSliceLow = findSliceT(tMin);
+    	int tSliceHigh = findSliceT(tMax);
+    	int aSliceLow = findSliceA(aMin);
+    	int aSliceHigh = findSliceA(aMax);
+    	
+    	
     	return 0;
     }
     
