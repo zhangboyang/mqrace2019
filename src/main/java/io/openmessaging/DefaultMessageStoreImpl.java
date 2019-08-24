@@ -1,32 +1,16 @@
 package io.openmessaging;
 
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicIntegerArray;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.LongAccumulator;
-import java.util.concurrent.locks.ReentrantLock;
-
-import io.openmessaging.RTree.AverageResult;
-import io.openmessaging.RTree.NodeEntry;
-import sun.misc.Unsafe;
-
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.io.RandomAccessFile;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import sun.nio.ch.FileChannelImpl;
 
 /**
  * 这是一个简单的基于内存的实现，以方便选手理解题意；
@@ -34,6 +18,23 @@ import sun.nio.ch.FileChannelImpl;
  */
 public class DefaultMessageStoreImpl extends MessageStore {
 
+    private static class TComparator implements Comparator<Message> {
+        @Override
+        public int compare(Message a, Message b) {
+            return Long.compare(a.getT(), b.getT());
+        }
+    }
+    private static class AComparator implements Comparator<Message> {
+        @Override
+        public int compare(Message a, Message b) {
+        	return Long.compare(a.getA(), b.getA());
+        }
+    }
+    private static final TComparator tComparator = new TComparator();
+    private static final AComparator aComparator = new AComparator();
+    
+    
+    
 	private static void printFile(String path)
 	{
 		System.out.println(String.format("======== %s ========", path)); 
@@ -67,11 +68,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	
     private static void doSortMessage(ArrayList<Message> a)
     {
-    	Collections.sort(a, new Comparator<Message>() {
-			public int compare(Message a, Message b) {
-				return Long.compare(a.getT(), b.getT());
-			}
-		});
+    	Collections.sort(a, tComparator);
     }
     
     
@@ -86,101 +83,187 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	});
     }
     
-
-    private static int MAXMSG = 2100000000;
-    private static int MAXSLICE = 2000;
+    private static final String storagePath = "./";
+//    private static final String storagePath = "/alidata1/race2019/data/";
     
-    private static int nSlice = 1;
-    private static long slicePivot[] = new long[MAXSLICE];
-    private static NodeEntry sliceRoot[] = new NodeEntry[MAXSLICE];
-    
+    private static final RandomAccessFile tAxisData;
+    private static final RandomAccessFile tAxisBodyData;
     static {
-    	for (int i = 0; i < MAXSLICE; i++) {
-    		sliceRoot[i] = RTree.allocRootNode();
-    	}
-    }
-    private static int insCount = 0;
-
-    private static boolean insertDone = false;
-    
-    private static void flushInsertQueue()
-    {
-    	insertDone = true;
-    	int nThread = putThreadCount.get();
+    	RandomAccessFile t, tb;
     	try {
-	    	for (int i = 0; i < nThread; i++) {
-	    		insertQueue.put(putTLD[i].buffer);
-	    		putTLD[i] = null;
-	    	}
-	    } catch (InterruptedException e) {
+			t = new RandomAccessFile(storagePath + "tAxis.point.data", "rw");
+			t.setLength(0);
+			tb = new RandomAccessFile(storagePath + "tAxis.body.data", "rw");
+			tb.setLength(0);
+		} catch (IOException e) {
+			t = null;
+			tb = null;
 			e.printStackTrace();
 			System.exit(-1);
 		}
+    	tAxisData = t;
+    	tAxisBodyData = tb;
     }
-    private static void insertProc()
-    {
-    	System.out.println("[" + new Date() + "]: insert thread started");
-    	
-    	try {
-    		long maxT = Long.MIN_VALUE;
-    		
-	    	do {
-	    		Message[] buffer = insertQueue.take();
-	    		for (int i = 0; i < buffer.length; i++) {
-	    			if (buffer[i] != null) {
-	    				
-	    				if (insCount % 1000000 == 0) {
-	    					System.out.println("[" + new Date() + "]: " + String.format("ins %d: %s", insCount, dumpMessage(buffer[i])));
-	    				}
-	    				
-	    				long t = buffer[i].getT();
-	    				maxT = Math.max(maxT, t);
-	    				
-	    				
-	    				insCount++;
-	    				if (insCount % (MAXMSG / MAXSLICE) == 0) {
-	    					slicePivot[nSlice++] = maxT;
-	    				}
-	    				
-	    				int l = 0, r = nSlice;
-	    				while (r - l > 1) {
-	    					int m = (l + r) / 2;
-	    					if (t >= slicePivot[m]) {
-	    						l = m;
-	    					} else {
-	    						r = m;
-	    					}
-	    				}
-	    				
-	    				assert t >= slicePivot[l];
-	    				assert r == nSlice || t < slicePivot[r];
-	    				
-	    				sliceRoot[l] = RTree.insertToTree(sliceRoot[l], buffer[i]);
+    
 
+    private static final int MAXMSG = 2100000000;
+    private static final int N_TSLICE = 5000;
+    private static final int N_ASLICE = 1000;
+    
+    private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
+    
+    private static int tSliceCount = 0;
+    private static long tSlicePivot[] = new long[N_TSLICE + 1];
+    private static int tSliceRecordCount[] = new int[N_TSLICE + 1];
+    private static int tSliceRecordOffset[] = new int[N_TSLICE + 1];
+    
+    
+    private static int aSliceCount = 1;
+    private static long aSlicePivot[] = new long[N_ASLICE + 1];
+
+    private static int insCount = 0;
+    private static int writeCount = 0;
+
+    
+    
+    private static ArrayList<Message> writeBuffer = new ArrayList<Message>();
+
+    private static void flushWriteBuffer(long exclusiveT) throws IOException
+    {
+		ByteBuffer pointBuffer = ByteBuffer.allocate(writeBuffer.size() * 16);
+		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+		ByteBuffer bodyBuffer = ByteBuffer.allocate(writeBuffer.size() * 34);
+		bodyBuffer.order(ByteOrder.LITTLE_ENDIAN);
+		
+		int nWrite;
+		for (nWrite = 0; nWrite < writeBuffer.size(); nWrite++) {
+			Message curMessage = writeBuffer.get(nWrite);
+			if (curMessage.getT() == exclusiveT) {
+				break;
+			}
+			
+			writeCount++;
+			
+			pointBuffer.putLong(curMessage.getT());
+			pointBuffer.putLong(curMessage.getA());
+			bodyBuffer.put(curMessage.getBody());
+		}
+		
+		tSliceRecordCount[tSliceCount - 1] = nWrite;
+		writeBuffer.subList(0, nWrite).clear();
+		
+		tAxisData.write(pointBuffer.array(), 0, nWrite * 16);
+		tAxisBodyData.write(bodyBuffer.array(), 0, nWrite * 34);
+    }
+    
+//    private static Message lastMessage = null;
+    private static void insertMessage(Message message) throws IOException
+    {
+//    	if (lastMessage != null) {
+//    		assert message.getT() >= lastMessage.getT();
+//    	}
+//    	lastMessage = message;
+    	
+
+		long curT = message.getT();
+		
+		if (insCount % TSLICE_INTERVAL == 0) {
+			if (tSliceCount > 0) {
+				flushWriteBuffer(curT);
+			}
+			tSlicePivot[tSliceCount++] = curT;
+			System.out.println(String.format("t-slice %d: pivot=%d", tSliceCount - 1, tSlicePivot[tSliceCount - 1]));
+		}
+		
+		writeBuffer.add(message);
+		
+    	insCount++;
+    	if (insCount % 1000000 == 0) {
+			System.out.println("[" + new Date() + "]: " + String.format("ins %d: %s", insCount, dumpMessage(message)));
+		}
+    }
+
+    private static volatile boolean putFinished = false;
+    private static void sortThreadProc()
+    {
+    	System.out.println("[" + new Date() + "]: sort thread started");
+    	
+    	int nThread = putThreadCount.get();
+    	
+    	Message buffer[][] = new Message[nThread][];
+    	int bufptr[] = new int[nThread];
+    	
+    	boolean threadExited[] = new boolean[nThread];
+
+    	try {
+        	for (int i = 0; i < nThread; i++) {
+        		buffer[i] = insertQueue[i].take();
+        		bufptr[i] = 0;
+        	}
+        	
+	    	while (true) {
+	    		
+	    		long minT = Long.MAX_VALUE;
+	    		int qid = -1;
+	    		
+	    		for (int i = 0; i < nThread; i++) {
+	    			Message m = buffer[i][bufptr[i]];
+	    			if (m != null) {
+		    			long curT = m.getT();
+		    			if (curT <= minT) {
+		    				minT = curT;
+		    				qid = i;
+		    			}
 	    			}
 	    		}
-	    	} while (!insertDone || !insertQueue.isEmpty());
-	    } catch (InterruptedException e) {
+	    		
+	    		if (qid == -1) break;
+	    		
+	    		insertMessage(buffer[qid][bufptr[qid]]);
+	    		
+	    		if (++bufptr[qid] >= buffer[qid].length) {
+	    			if (threadExited[qid]) {
+	    				buffer[qid] = new Message[1];
+	    			} else {
+	    				if (putFinished && insertQueue[qid].isEmpty()) {
+	    					buffer[qid] = null;
+	    				} else {
+	    					buffer[qid] = insertQueue[qid].poll(3, TimeUnit.SECONDS);
+	    				}
+		    			if (buffer[qid] == null) {
+		    				System.out.println(String.format("put thread %d timeout, assume exited", qid));
+		    				buffer[qid] = putTLD[qid].buffer;
+		    				threadExited[qid] = true;
+		    			}
+	    			}
+	    			bufptr[qid] = 0;
+	    		}
+	    	}
+	    	
+	    	flushWriteBuffer(Long.MIN_VALUE);
+	    	
+	    } catch (InterruptedException | IOException e) {
 			e.printStackTrace();
 			System.exit(-1);
 		}
     	
-    	System.out.println("[" + new Date() + "]: insert thread finished");
+    	System.out.println("[" + new Date() + "]: sort thread finished");
     }
 
     
     private static final int MAXTHREAD = 100;
     private static final int MAXQUEUE = 20;
     
-    private static final ArrayBlockingQueue<Message[]> insertQueue = new ArrayBlockingQueue<Message[]>(MAXQUEUE);
+    private static final ArrayBlockingQueue<Message[]> insertQueue[] = new ArrayBlockingQueue[MAXTHREAD];
     
 
     
     
-    private static final int MAXBUFFER = 100;
+    private static final int MAXBUFFER = 1000;
     private static class PutThreadLocalData {
     	Message[] buffer;
     	int bufptr;
+    	int threadid;
     	
     	void clear() {
     		buffer = new Message[MAXBUFFER];
@@ -192,7 +275,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final ThreadLocal<PutThreadLocalData> putBuffer = new ThreadLocal<PutThreadLocalData>() {
         @Override protected PutThreadLocalData initialValue() {
         	PutThreadLocalData pd = new PutThreadLocalData();
-        	putTLD[putThreadCount.getAndIncrement()] = pd;
+        	pd.threadid = putThreadCount.getAndIncrement();
+        	putTLD[pd.threadid] = pd;
+        	insertQueue[pd.threadid] = new ArrayBlockingQueue<Message[]>(MAXQUEUE); 
         	pd.clear();
         	return pd;
         }
@@ -222,7 +307,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 								e.printStackTrace();
 								System.exit(-1);
 							}
-					    	insertProc();
+					    	sortThreadProc();
 					    }
 					};
 					sortThread.start();
@@ -235,7 +320,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		PutThreadLocalData pd = putBuffer.get();
 			pd.buffer[pd.bufptr++] = message;
 			if (pd.bufptr == pd.buffer.length) {
-				insertQueue.put(pd.buffer);
+				insertQueue[pd.threadid].put(pd.buffer);
 				pd.clear();
 			}
 		} catch (InterruptedException e) {
@@ -254,23 +339,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			if (state == 1) {
     				System.out.println("[" + new Date() + "]: getMessage() started");
     				
-    				flushInsertQueue();
-    				
     				try {
+    					putFinished = true;
 						sortThread.join();
 					} catch (InterruptedException e) {
 						e.printStackTrace();
 						System.exit(-1);
 					}
     				
-    				System.out.println(String.format("total=%d", insCount));
-    				RTree.finishInsert();
-    				System.gc();
+    				System.out.println(String.format("insCount=%d", insCount));
+    				System.out.println(String.format("writeCount=%d", writeCount));
     				
-    				for (int i = 0; i < nSlice; i++) {
-    		    		NodeEntry r = sliceRoot[i];
-    		    		System.out.println(String.format("slice %d: pivot=%d tree=(%d,%d,%d,%d)(%d,%d)", i, slicePivot[i], r.left, r.right, r.bottom, r.top, r.sumA, r.cntA));
-    		    	}
+    				System.gc();
+
     				
 //    				firstFlag = true;
     				state = 2;
@@ -278,18 +359,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		}
     	}
     	
-    	
-    	
-    	System.out.println("[" + new Date() + "]: " + String.format("queryData: %d %d %d %d", tMin, tMax, aMin, aMax));
-    	
+
     	ArrayList<Message> result = new ArrayList<Message>();
     	
-    	for (int i = 0; i < nSlice; i++) {
-    		RTree.queryData(sliceRoot[i], result, tMin, tMax, aMin, aMax);
-    	}
 
-    	doSortMessage(result);
-    	
 
 //    	//为最后的查询平均值预热JVM
 //    	getAvgValue(aMin, aMax, tMin, tMax);
@@ -303,45 +376,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	return result;
     }
 
-    private static final LongAccumulator nAvgStartTime = new LongAccumulator(Math::min, Long.MAX_VALUE);
-    private static final AtomicLong nAvgResult = new AtomicLong();
-    private static final AtomicLong nAvgQuery = new AtomicLong();
-    private static final AtomicLong nAvgQueryLeaf = new AtomicLong();
+
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
-    	nAvgStartTime.accumulate(System.nanoTime());
-    	
-    	AverageResult result = new AverageResult();
-    	
-    	int nValidSlice = 0;
-    	
-    	for (int i = 0; i < nSlice; i++) {
-    		NodeEntry r = sliceRoot[i];
-    		if (RTree.rectOverlap(r.left, r.right, r.bottom, r.top, tMin, tMax, aMin, aMax)) {
-    			RTree.queryAverage(r, result, tMin, tMax, aMin, aMax);
-    			nValidSlice++;
-    		}
-    	}
-    	
-    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: nValidSlice=%d nLeaf=%d (%d %d %d %d)", nValidSlice, result.nleaf, tMin, tMax, aMin, aMax));
-    	
-    	nAvgQuery.incrementAndGet();
-    	nAvgQueryLeaf.addAndGet(result.nleaf);
-    	nAvgResult.addAndGet(result.cnt);
-    	
-    	return result.cnt > 0 ? result.sum / result.cnt : 0;
+    	return 0;
     }
     
     private static void atShutdown()
     {
-    	long deltaT = System.nanoTime() - nAvgStartTime.get();
     	System.out.println("[" + new Date() + "]: shutdown hook");
-    	
-    	System.out.println(String.format("deltaT=%f", deltaT * 1e-6));
-    	System.out.println(String.format("Result=%d", nAvgResult.get()));
-    	System.out.println(String.format("expectedScore=%f", nAvgResult.get() * 1e6 / deltaT));
-    	System.out.println(String.format("Query=%d", nAvgQuery.get()));
-    	System.out.println(String.format("QueryLeaf=%d", nAvgQueryLeaf.get()));
-    	System.out.println(String.format("leaf/query=%f", (double)nAvgQueryLeaf.get() / nAvgQuery.get()));
     }
 }
