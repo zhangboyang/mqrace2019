@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAccumulator;
 import java.util.concurrent.locks.ReentrantLock;
 
 import io.openmessaging.RTree.AverageResult;
@@ -80,7 +81,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     static {
     	Runtime.getRuntime().addShutdownHook(new Thread() {
     		public void run() {
-    			System.out.println("[" + new Date() + "]: shutdown hook");
+    			atShutdown();
     		}
     	});
     }
@@ -297,19 +298,50 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    			getAvgValue(aMin, aMax, tMin, tMax);
 //    		}
 //    	}
+    	
 
     	return result;
     }
 
+    private static final LongAccumulator nAvgStartTime = new LongAccumulator(Math::min, Long.MAX_VALUE);
+    private static final AtomicLong nAvgResult = new AtomicLong();
+    private static final AtomicLong nAvgQuery = new AtomicLong();
+    private static final AtomicLong nAvgQueryLeaf = new AtomicLong();
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
-    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: %d %d %d %d", tMin, tMax, aMin, aMax));
+    	nAvgStartTime.accumulate(System.nanoTime());
     	
     	AverageResult result = new AverageResult();
     	
+    	int nValidSlice = 0;
+    	
     	for (int i = 0; i < nSlice; i++) {
-    		RTree.queryAverage(sliceRoot[i], result, tMin, tMax, aMin, aMax);
+    		NodeEntry r = sliceRoot[i];
+    		if (RTree.rectOverlap(r.left, r.right, r.bottom, r.top, tMin, tMax, aMin, aMax)) {
+    			RTree.queryAverage(r, result, tMin, tMax, aMin, aMax);
+    			nValidSlice++;
+    		}
     	}
+    	
+    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: nValidSlice=%d nLeaf=%d (%d %d %d %d)", nValidSlice, result.nleaf, tMin, tMax, aMin, aMax));
+    	
+    	nAvgQuery.incrementAndGet();
+    	nAvgQueryLeaf.addAndGet(result.nleaf);
+    	nAvgResult.addAndGet(result.cnt);
+    	
     	return result.cnt > 0 ? result.sum / result.cnt : 0;
+    }
+    
+    private static void atShutdown()
+    {
+    	long deltaT = System.nanoTime() - nAvgStartTime.get();
+    	System.out.println("[" + new Date() + "]: shutdown hook");
+    	
+    	System.out.println(String.format("deltaT=%f", deltaT * 1e-6));
+    	System.out.println(String.format("Result=%d", nAvgResult.get()));
+    	System.out.println(String.format("expectedScore=%f", nAvgResult.get() * 1e6 / deltaT));
+    	System.out.println(String.format("Query=%d", nAvgQuery.get()));
+    	System.out.println(String.format("QueryLeaf=%d", nAvgQueryLeaf.get()));
+    	System.out.println(String.format("leaf/query=%f", (double)nAvgQueryLeaf.get() / nAvgQuery.get()));
     }
 }

@@ -111,17 +111,17 @@ public class RTree {
 	
 	
 	
-	private static boolean rectOverlap(long aLeft, long aRight, long aBottom, long aTop, long bLeft, long bRight, long bBottom, long bTop)
+	public static boolean rectOverlap(long aLeft, long aRight, long aBottom, long aTop, long bLeft, long bRight, long bBottom, long bTop)
 	{
 		return aLeft <= bRight && aRight >= bLeft && aTop >= bBottom && aBottom <= bTop;
 	}
 	
-	private static boolean pointInRect(long lr, long bt, long rectLeft, long rectRight, long rectBottom, long rectTop)
+	public static boolean pointInRect(long lr, long bt, long rectLeft, long rectRight, long rectBottom, long rectTop)
 	{
 		return rectLeft <= lr && lr <= rectRight && rectBottom <= bt && bt <= rectTop;
 	}
 	
-	private static boolean rectInRect(long aLeft, long aRight, long aBottom, long aTop, long bLeft, long bRight, long bBottom, long bTop)
+	public static boolean rectInRect(long aLeft, long aRight, long aBottom, long aTop, long bLeft, long bRight, long bBottom, long bTop)
 	{
 		return bLeft <= aLeft && aRight <= bRight && bBottom <= aBottom && aTop <= bTop;
 	}
@@ -585,6 +585,7 @@ public class RTree {
     public static class AverageResult {
     	long sum;
     	int cnt;
+    	int nleaf;
     }
     
     public static void queryAverage(NodeEntry root, AverageResult result, long left, long right, long bottom, long top)
@@ -600,7 +601,7 @@ public class RTree {
             		result.cnt++;
             	}
     		}
-    		
+    		result.nleaf++;
     		doneLeaf(root.leafptr);
     		return;
     	}

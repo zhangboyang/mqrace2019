@@ -103,7 +103,7 @@ public class DemoTester {
 //        }
         
         
-        for (int r = 0; r < 10; r++) {
+        for (int r = 0; r < 1; r++) {
 	        //Step3: 查询聚合结果
 	        long checkStart = System.currentTimeMillis();
 	        AtomicLong valueCheckTimes = new AtomicLong(0);
