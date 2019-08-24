@@ -154,6 +154,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int blockCountTable[][] = new int[N_TSLICE][N_ASLICE];
     private static final int blockOffsetTableAxisT[][] = new int[N_TSLICE][N_ASLICE];
     private static final int blockOffsetTableAxisA[][] = new int[N_TSLICE][N_ASLICE];
+    private static final long blockPrefixSumBaseTable[][] = new long[N_TSLICE][N_ASLICE];
     
     private static int insCount = 0;
     private static int tAxisWriteCount = 0;
@@ -271,13 +272,30 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		for (int tSliceId = 0; tSliceId < tSliceCount; tSliceId++) {
 //    			System.out.println(String.format("%d %d: %016X", aSliceId, tSliceId, peekFrontA(tSliceId)));
     			assert peekFrontA(tSliceId) >= aSlicePivot[aSliceId];
+    			
+    			// 取出当前小块的数据
+    			int offsetLow = writeBufferPtr;
     			while (peekFrontA(tSliceId) < aLimit) {
     				putWriteBuffer(getFront(tSliceId));
     				blockCountTable[tSliceId][aSliceId]++;
     			}
+    			int offsetHigh = writeBufferPtr;
+    			
+    			// 对当前小块进行排序
+    			Arrays.sort(writeBuffer, offsetLow, offsetHigh, tComparator); // 每小块各自sort更快，不用一大块sort
+    			
+    			// 对当前小块计算前缀和
+    			long prefixSum = blockPrefixSumBaseTable[tSliceId][aSliceId];
+    			for (int i = offsetLow; i < offsetHigh; i++) {
+    				Message m = writeBuffer[i];
+    				long curA = m.getA();
+    				prefixSum += curA;
+    				m.setA(prefixSum);
+    			}
+    			if (aSliceId < N_ASLICE - 1) {
+    				blockPrefixSumBaseTable[tSliceId][aSliceId + 1] = prefixSum;
+    			}
     		}
-    		
-    		Arrays.parallelSort(writeBuffer, 0, writeBufferPtr, tComparator);
     		
     		System.out.println(String.format("a-slice %d: pivot=%d limit=%d count=%d", aSliceId, aSlicePivot[aSliceId], aLimit, writeBufferPtr));
     		
@@ -753,12 +771,68 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static void queryAverageAxisA(AverageResult result, int aSliceLow, int aSliceHigh, int tSliceLow, int tSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
     	int baseOffsetLow = blockOffsetTableAxisA[tSliceLow][aSliceLow];
-		int nRecordLow = blockOffsetTableAxisA[tSliceLow][aSliceHigh] + blockCountTable[tSliceLow][aSliceHigh] - baseOffsetLow;
+		int nRecordLow = blockOffsetTableAxisA[tSliceHigh][aSliceLow] + blockCountTable[tSliceHigh][aSliceLow] - baseOffsetLow;
 		
-		int baseOffsetHigh = blockOffsetTableAxisT[tSliceHigh][aSliceLow];
-		int nRecordHigh = blockOffsetTableAxisT[tSliceHigh][aSliceHigh] + blockCountTable[tSliceHigh][aSliceHigh] - baseOffsetHigh;
+		int baseOffsetHigh = blockOffsetTableAxisA[tSliceLow][aSliceHigh];
+		int nRecordHigh = blockOffsetTableAxisA[tSliceHigh][aSliceHigh] + blockCountTable[tSliceHigh][aSliceHigh] - baseOffsetHigh;
+		
+		ByteBuffer lowBuffer = ByteBuffer.allocate(nRecordLow * 16);
+		lowBuffer.order(ByteOrder.LITTLE_ENDIAN);
+		aAxisChannel.read(lowBuffer, (long)baseOffsetLow * 16);
+		lowBuffer.position(0);
+		LongBuffer lowBufferL = lowBuffer.asLongBuffer();
 		
 		
+		ByteBuffer highBuffer = ByteBuffer.allocate(nRecordHigh * 16);
+		highBuffer.order(ByteOrder.LITTLE_ENDIAN);
+		aAxisChannel.read(highBuffer, (long)baseOffsetHigh * 16);
+		highBuffer.position(0);
+		LongBuffer highBufferL = highBuffer.asLongBuffer();
+		
+		int lowOffset = 0;
+		int highOffset = 0;
+		for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
+			int lowCount = blockCountTable[tSliceId][aSliceLow];
+			int highCount = blockCountTable[tSliceId][aSliceHigh];
+			
+			long lowSum = blockPrefixSumBaseTable[tSliceId][aSliceLow];
+			int lowPtr = -1;
+			for (int i = lowOffset; i < lowOffset + lowCount; i++) { // FIXME: 二分
+				long t = lowBufferL.get(i * 2);
+				if (t < tMin) {
+					lowSum = lowBufferL.get(i * 2 + 1);
+					lowPtr = i;
+				} else {
+					break;
+				}
+			}
+			lowPtr++;
+			
+			long highSum = blockPrefixSumBaseTable[tSliceId][aSliceHigh];
+			int highPtr = -1;
+			for (int i = highOffset; i < highOffset + highCount; i++) {
+				long t = highBufferL.get(i * 2);
+				if (t <= tMax) {
+					highPtr = i;
+					highSum = highBufferL.get(i * 2 + 1);
+				}
+			}
+			
+			
+			int globalLowPtr = blockOffsetTableAxisT[tSliceId][aSliceLow] + lowPtr;
+			int globalHighPtr = blockOffsetTableAxisT[tSliceId][aSliceHigh] + highPtr;
+			
+			if (globalHighPtr >= globalLowPtr) {
+				result.sum += highSum - lowSum;
+				result.cnt += globalHighPtr - globalLowPtr + 1;
+			}
+			
+			lowOffset += lowCount;
+			highOffset += highCount;
+		}
+		
+		assert lowOffset == nRecordLow;
+		assert highOffset == nRecordHigh;
     }
     
 
