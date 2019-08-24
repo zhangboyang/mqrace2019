@@ -125,6 +125,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static int writeCount = 0;
 
     
+    private static long globalMaxA = Long.MIN_VALUE;
+    private static long globalMinA = Long.MAX_VALUE;
+    
     
     private static ArrayList<Message> writeBuffer = new ArrayList<Message>();
 
@@ -164,7 +167,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    	}
 //    	lastMessage = message;
     	
-
+    	long curA = message.getA();
+    	globalMinA = Math.min(globalMinA, curA);
+    	globalMaxA = Math.max(globalMaxA, curA);
+    	
 		long curT = message.getT();
 		
 		if (insCount % TSLICE_INTERVAL == 0) {
@@ -172,7 +178,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				flushWriteBuffer(curT);
 			}
 			tSlicePivot[tSliceCount++] = curT;
-			System.out.println(String.format("t-slice %d: pivot=%d", tSliceCount - 1, tSlicePivot[tSliceCount - 1]));
+			//System.out.println(String.format("t-slice %d: pivot=%d", tSliceCount - 1, tSlicePivot[tSliceCount - 1]));
 		}
 		
 		writeBuffer.add(message);
@@ -181,6 +187,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	if (insCount % 1000000 == 0) {
 			System.out.println("[" + new Date() + "]: " + String.format("ins %d: %s", insCount, dumpMessage(message)));
 		}
+    }
+    
+    private static void postInsertProcess() throws IOException
+    {
+    	flushWriteBuffer(Long.MIN_VALUE);
+    	
+    	for (int i = 0; i < tSliceCount; i++) {
+    		if (i > 0) {
+    			tSliceRecordOffset[i] = tSliceRecordOffset[i - 1] + tSliceRecordCount[i];
+    		}
+    		System.out.println(String.format("t-slice %d: pivot=%d count=%d offset=%d", i, tSlicePivot[i], tSliceRecordCount[i], tSliceRecordOffset[i]));
+    	}
     }
 
     private static volatile boolean putFinished = false;
@@ -240,7 +258,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	    		}
 	    	}
 	    	
-	    	flushWriteBuffer(Long.MIN_VALUE);
+	    	postInsertProcess();
 	    	
 	    } catch (InterruptedException | IOException e) {
 			e.printStackTrace();
@@ -349,6 +367,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				
     				System.out.println(String.format("insCount=%d", insCount));
     				System.out.println(String.format("writeCount=%d", writeCount));
+    				
+    				System.out.println(String.format("globalMinA=%d", globalMinA));
+    				System.out.println(String.format("globalMaxA=%d", globalMaxA));
+    				
     				
     				System.gc();
 
