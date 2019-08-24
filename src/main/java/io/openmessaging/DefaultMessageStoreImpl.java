@@ -5,6 +5,8 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.LongBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
@@ -18,6 +20,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class DefaultMessageStoreImpl extends MessageStore {
 
+	private static boolean pointInRect(long lr, long bt, long rectLeft, long rectRight, long rectBottom, long rectTop)
+	{
+		return rectLeft <= lr && lr <= rectRight && rectBottom <= bt && bt <= rectTop;
+	}
+	
     private static class TComparator implements Comparator<Message> {
         @Override
         public int compare(Message a, Message b) {
@@ -66,10 +73,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	return s.toString();
 	}
 	
-    private static void doSortMessage(ArrayList<Message> a)
-    {
-    	Collections.sort(a, tComparator);
-    }
     
     
     private static volatile int state = 0;
@@ -86,29 +89,49 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final String storagePath = "./";
 //    private static final String storagePath = "/alidata1/race2019/data/";
     
+    private static final String tAxisPointFile = storagePath + "tAxis.point.data";
+    private static final String tAxisBodyFile = storagePath + "tAxis.body.data";
+    private static final String aAxisPointFile = storagePath + "aAxis.point.data";
+    
     private static final RandomAccessFile tAxisData;
     private static final RandomAccessFile tAxisBodyData;
     private static final RandomAccessFile aAxisData;
+    
+    private static final FileChannel tAxisChannel;
+    private static final FileChannel tAxisBodyChannel;
+    private static final FileChannel aAxisChannel;
+    
     static {
-    	RandomAccessFile t, tb, a;
+    	RandomAccessFile tFile, tbFile, aFile;
+    	FileChannel tChannel, tbChannel, aChannel;
     	try {
-			t = new RandomAccessFile(storagePath + "tAxis.point.data", "rw");
-			t.setLength(0);
-			tb = new RandomAccessFile(storagePath + "tAxis.body.data", "rw");
-			tb.setLength(0);
-			a = new RandomAccessFile(storagePath + "aAxis.point.data", "rw");
-			a.setLength(0);
+			tFile = new RandomAccessFile(tAxisPointFile, "rw");
+			tFile.setLength(0);
+			tbFile = new RandomAccessFile(tAxisBodyFile, "rw");
+			tbFile.setLength(0);
+			aFile = new RandomAccessFile(aAxisPointFile, "rw");
+			aFile.setLength(0);
+			
+			tChannel = FileChannel.open(Paths.get(tAxisPointFile));
+			tbChannel = FileChannel.open(Paths.get(tAxisBodyFile));
+			aChannel = FileChannel.open(Paths.get(aAxisPointFile));
 			
 		} catch (IOException e) {
-			t = null;
-			tb = null;
-			a = null;
+			tFile = null;
+			tbFile = null;
+			aFile = null;
+			tChannel = null;
+			tbChannel = null;
+			aChannel = null;
 			e.printStackTrace();
 			System.exit(-1);
 		}
-    	tAxisData = t;
-    	tAxisBodyData = tb;
-    	aAxisData = a;
+    	tAxisData = tFile;
+    	tAxisBodyData = tbFile;
+    	aAxisData = aFile;
+        tAxisChannel = tChannel;
+        tAxisBodyChannel = tbChannel;
+        aAxisChannel = aChannel;
     }
     
 
@@ -138,6 +161,31 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static long globalMaxA = Long.MIN_VALUE;
     private static long globalMinA = Long.MAX_VALUE;
+    
+    
+    
+    
+    private static int findSliceT(long tValue)
+    {
+    	for (int i = 0; i < tSliceCount; i++) {
+    		if (tSlicePivot[i] <= tValue && tValue < tSlicePivot[i + 1]) {
+    			return i;
+    		}
+    	}
+    	assert false;
+    	return -1;
+    }
+    private static int findSliceA(long aValue)
+    {
+    	for (int i = 0; i < N_ASLICE; i++) {
+    		if (aSlicePivot[i] <= aValue && aValue < aSlicePivot[i + 1]) {
+    			return i;
+    		}
+    	}
+    	assert false;
+    	return -1;
+    }
+    
     
     
     
@@ -224,6 +272,28 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	System.out.println("[" + new Date() + "]: build A-axis index finished");
     }
     
+    private static void buildOffsetTable()
+    {
+    	int offset;
+    	
+    	offset = 0;
+    	for (int tSliceId = 0; tSliceId < tSliceCount; tSliceId++) {
+    		for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
+    			blockOffsetTableAxisT[tSliceId][aSliceId] = offset;
+    			offset += blockCountTable[tSliceId][aSliceId];
+    		}
+    	}
+    	assert offset == insCount;
+    	
+    	offset = 0;
+    	for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
+    		for (int tSliceId = 0; tSliceId < tSliceCount; tSliceId++) {
+    			blockOffsetTableAxisA[tSliceId][aSliceId] = offset;
+    			offset += blockCountTable[tSliceId][aSliceId];
+    		}
+    	}
+    	assert offset == insCount;
+    }
     
     
     
@@ -316,6 +386,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	// 建立a轴上的索引
     	buildIndexAxisA();
+    	
+    	// 建立内存内索引表
+    	buildOffsetTable();
+    	
+    	// 关闭用于写入的文件
+    	tAxisData.close();
+    	tAxisBodyData.close();
+    	aAxisData.close();
     }
 
     private static volatile boolean putFinished = false;
@@ -501,7 +579,50 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     	ArrayList<Message> result = new ArrayList<Message>();
     	
-
+    	int tSliceLow = findSliceT(tMin);
+    	int tSliceHigh = findSliceT(tMax);
+    	int aSliceLow = findSliceA(aMin);
+    	int aSliceHigh = findSliceA(aMax);
+    	
+    	
+		try {
+			
+	    	for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
+	    		int baseOffset = blockOffsetTableAxisT[tSliceId][aSliceLow];
+	    		int nRecord = blockOffsetTableAxisT[tSliceId][aSliceHigh] + blockCountTable[tSliceId][aSliceHigh] - baseOffset;
+	    		
+	    		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
+	    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+	    		ByteBuffer bodyBuffer = ByteBuffer.allocate(nRecord * 34);
+	    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+	
+				int nPointRead = tAxisChannel.read(pointBuffer, (long)baseOffset * 16);
+				int nBodyRead = tAxisBodyChannel.read(bodyBuffer, (long)baseOffset * 34);
+				assert nPointRead == nRecord * 16;
+				assert nBodyRead == nRecord * 34;
+				
+				pointBuffer.position(0);
+				LongBuffer pointBufferL = pointBuffer.asLongBuffer();
+				
+				for (int i = 0; i < nRecord; i++) {
+					long t = pointBufferL.get();
+					long a = pointBufferL.get();
+					
+					if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
+						byte body[] = new byte[34];
+						bodyBuffer.position(i * 34);
+						bodyBuffer.get(body);
+						result.add(new Message(a, t, body));
+					}
+				}
+	    	}
+    		
+		} catch (IOException e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
+		
+		Collections.sort(result, tComparator);
 
 //    	//为最后的查询平均值预热JVM
 //    	getAvgValue(aMin, aMax, tMin, tMax);
