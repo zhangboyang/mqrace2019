@@ -10,20 +10,27 @@ import java.util.concurrent.atomic.AtomicLong;
 //该评测程序主要便于选手在本地优化和调试自己的程序
 
 public class DemoTester {
+	static int TESTMODE = 1;
+	
 	
 	static long genAfromT(long T)
 	{
-//		long x = 100003;
-//		long r = 1;
-//		while (T > 0) {
-//			if ((T & 1) != 0) {
-//				r *= x;
-//			}
-//			T = T >>> 1;
-//			x = x * x;
-//		}
-//		return r & 0xffffffffffffL;
-		return T % 2 == 0 ? T + 30000 : T - 500;
+		if (TESTMODE == 1) {
+			return T % 2 == 0 ? T + 30000 : T - 500;
+		}
+		if (TESTMODE == 2) {
+			long x = 100003;
+			long r = 1;
+			while (T > 0) {
+				if ((T & 1) != 0) {
+					r *= x;
+				}
+				T = T >>> 1;
+				x = x * x;
+			}
+			return r & 0xffffffffffffL;
+		}
+		return T;
 	}
 	
     public static void main(String args[]) throws Exception {
@@ -41,7 +48,7 @@ public class DemoTester {
         //发送的线程数量
         int sendTsNum = 10;
         //查询的线程数量
-        int checkTsNum = 40;
+        int checkTsNum = 1;
         // 每次查询消息的最大跨度
         int maxMsgCheckSize = 100000;
         // 每次查询求平均的最大跨度
@@ -86,14 +93,16 @@ public class DemoTester {
         AtomicLong msgCheckTimes = new AtomicLong(0);
         AtomicLong msgCheckNum = new AtomicLong(0);
         Thread[] msgChecks = new Thread[checkTsNum];
-        for (int i = 0; i < checkTsNum; i++) {
-            msgChecks[i] = new Thread(new MessageChecker(messageStore, maxCheckTime, /*checkTimes*/getMessageTimes, msgNum, maxMsgCheckSize, msgCheckTimes, msgCheckNum));
-        }
-        for (int i = 0; i < checkTsNum; i++) {
-            msgChecks[i].start();
-        }
-        for (int i = 0; i < checkTsNum; i++) {
-            msgChecks[i].join();
+        if (TESTMODE == 1) {
+	        for (int i = 0; i < checkTsNum; i++) {
+	            msgChecks[i] = new Thread(new MessageChecker(messageStore, maxCheckTime, /*checkTimes*/getMessageTimes, msgNum, maxMsgCheckSize, msgCheckTimes, msgCheckNum));
+	        }
+	        for (int i = 0; i < checkTsNum; i++) {
+	            msgChecks[i].start();
+	        }
+	        for (int i = 0; i < checkTsNum; i++) {
+	            msgChecks[i].join();
+	        }
         }
         long msgCheckEnd = System.currentTimeMillis();
         System.out.printf("Message Check: %d ms Num:%d\n", msgCheckEnd - msgCheckStart, msgCheckNum.get());
