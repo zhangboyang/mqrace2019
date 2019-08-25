@@ -95,8 +95,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	});
     }
     
-//    private static final String storagePath = "./";
-    private static final String storagePath = "/alidata1/race2019/data/";
+    private static final String storagePath = "./";
+//    private static final String storagePath = "/alidata1/race2019/data/";
     
     private static final String tAxisPointFile = storagePath + "tAxis.point.data";
     private static final String tAxisBodyFile = storagePath + "tAxis.body.data";
@@ -169,9 +169,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final long aSlicePivot[] = new long[N_ASLICE + 1];
     
-    private static final int blockCountTable[][] = new int[N_TSLICE][N_ASLICE];
-    private static final int blockOffsetTableAxisT[][] = new int[N_TSLICE][N_ASLICE];
-    private static final int blockOffsetTableAxisA[][] = new int[N_TSLICE][N_ASLICE];
+    private static final int blockCountTable[][] = new int[N_TSLICE + 1][N_ASLICE + 1];
+    private static final int blockOffsetTableAxisT[][] = new int[N_TSLICE + 1][N_ASLICE + 1];
+    private static final int blockOffsetTableAxisA[][] = new int[N_TSLICE + 1][N_ASLICE + 1];
     private static final long blockPrefixSumBaseTable[][] = new long[N_TSLICE][N_ASLICE];
     
     private static int insCount = 0;
@@ -290,7 +290,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     {
     	System.out.println("[" + new Date() + "]: " + String.format("from=%d to=%d", tSliceFrom, tSliceTo));
     	
-    	int nRecord = tSliceRecordOffset[tSliceTo] + tSliceRecordCount[tSliceTo] - tSliceRecordOffset[tSliceFrom];
+    	int nRecord = tSliceRecordOffset[tSliceTo + 1] - tSliceRecordOffset[tSliceFrom];
     	reserveIndexByteBuffer(nRecord * 16);
     	reserveMsgBuffer(nRecord);
     	
@@ -309,7 +309,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		int sliceRecordCount[] = new int[N_ASLICE];
 		int bufferBase[] = new int[N_ASLICE];
 		for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
-			sliceRecordCount[aSliceId] = blockOffsetTableAxisA[tSliceTo][aSliceId] + blockCountTable[tSliceTo][aSliceId] - blockOffsetTableAxisA[tSliceFrom][aSliceId];
+			sliceRecordCount[aSliceId] = blockOffsetTableAxisA[tSliceTo + 1][aSliceId] - blockOffsetTableAxisA[tSliceFrom][aSliceId];
 			if (aSliceId > 0) {
 				bufferBase[aSliceId] = bufferBase[aSliceId - 1] + sliceRecordCount[aSliceId - 1];
 			}
@@ -317,17 +317,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		int msgPtr = 0;
 		for (int tSliceId = tSliceFrom; tSliceId <= tSliceTo; tSliceId++) {
+			// t块内部按a排序
+			Arrays.sort(indexMsgBuffer, tSliceRecordOffset[tSliceId] - tSliceRecordOffset[tSliceFrom], tSliceRecordOffset[tSliceId + 1] - tSliceRecordOffset[tSliceFrom], aComparator);
+			
 			for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
 				int msgCnt = blockCountTable[tSliceId][aSliceId];
 				
-				// FIXME: 小块内部要排序吗？
-				Arrays.sort(indexMsgBuffer, msgPtr, msgPtr + msgCnt, aComparator);
-				
-				int putBase = bufferBase[aSliceId] + blockOffsetTableAxisA[tSliceId][aSliceId] + blockCountTable[tSliceId][aSliceId] - blockOffsetTableAxisA[tSliceFrom][aSliceId];
+				int putBase = bufferBase[aSliceId] + blockOffsetTableAxisA[tSliceId][aSliceId] - blockOffsetTableAxisA[tSliceFrom][aSliceId];
 				for (int i = 0; i < msgCnt; i++) { 
 					Message msg = indexMsgBuffer[msgPtr++];
-					indexLongBuffer.put(putBase + i * 2, msg.getT());
-					indexLongBuffer.put(putBase + i * 2 + 1, msg.getA());
+					indexLongBuffer.put((putBase + i) * 2, msg.getT());
+					indexLongBuffer.put((putBase + i) * 2 + 1, msg.getA());
 				}
 			}
 		}
@@ -358,10 +358,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int offset;
     	
     	offset = 0;
-    	for (int tSliceId = 0; tSliceId < tSliceCount; tSliceId++) {
+    	for (int tSliceId = 0; tSliceId <= tSliceCount; tSliceId++) {
     		assert offset == tSliceRecordOffset[tSliceId];
     		
-    		for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
+    		for (int aSliceId = 0; aSliceId <= N_ASLICE; aSliceId++) {
     			blockOffsetTableAxisT[tSliceId][aSliceId] = offset;
     			offset += blockCountTable[tSliceId][aSliceId];
     		}
@@ -369,8 +369,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	assert offset == insCount;
     	
     	offset = 0;
-    	for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
-    		for (int tSliceId = 0; tSliceId < tSliceCount; tSliceId++) {
+    	for (int aSliceId = 0; aSliceId <= N_ASLICE; aSliceId++) {
+    		for (int tSliceId = 0; tSliceId <= tSliceCount; tSliceId++) {
     			blockOffsetTableAxisA[tSliceId][aSliceId] = offset;
     			offset += blockCountTable[tSliceId][aSliceId];
     		}
@@ -453,11 +453,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	assert writeBufferPtr == 0;
     	
     	// 计算各个块在文件中的偏移
-    	for (int i = 0; i < tSliceCount; i++) {
+    	for (int i = 0; i <= tSliceCount; i++) {
     		if (i > 0) {
     			tSliceRecordOffset[i] = tSliceRecordOffset[i - 1] + tSliceRecordCount[i - 1];
     		}
-    		System.out.println(String.format("t-slice %d: pivot=%d count=%d offset=%d", i, tSlicePivot[i], tSliceRecordCount[i], tSliceRecordOffset[i]));
+//    		System.out.println(String.format("t-slice %d: pivot=%d count=%d offset=%d", i, tSlicePivot[i], tSliceRecordCount[i], tSliceRecordOffset[i]));
     	}
     	
     	// 计算a轴上的分割点
@@ -673,38 +673,38 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	
 		try {
+    		// t轴块内没按照a排序，因此要把对应t轴上的块全部读进来
+    		// 就算是按a排序了并只读取需要的a轴上的块，因为t轴分块分得很细，也不会有性能提升
+    		// 用a轴上的索引不可行，因为需要读取body
 			
-	    	for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
-	    		int baseOffset = tSliceRecordOffset[tSliceId];
-	    		int nRecord = tSliceRecordCount[tSliceId];
-//	    		int baseOffset = blockOffsetTableAxisT[tSliceId][aSliceLow];
-//	    		int nRecord = blockOffsetTableAxisT[tSliceId][aSliceHigh] + blockCountTable[tSliceId][aSliceHigh] - baseOffset;
-	    		
-	    		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
-	    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
-	    		ByteBuffer bodyBuffer = ByteBuffer.allocate(nRecord * 34);
-	    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
-	
-				int nPointRead = tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
-				int nBodyRead = tAxisBodyChannel.read(bodyBuffer, (long)baseOffset * 34);
-				assert nPointRead == nRecord * 16;
-				assert nBodyRead == nRecord * 34;
+    		int baseOffset = tSliceRecordOffset[tSliceLow];
+    		int nRecord = tSliceRecordOffset[tSliceHigh + 1] - tSliceRecordOffset[tSliceLow];
+    		
+    		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
+    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+    		ByteBuffer bodyBuffer = ByteBuffer.allocate(nRecord * 34);
+    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+
+			int nPointRead = tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
+			int nBodyRead = tAxisBodyChannel.read(bodyBuffer, (long)baseOffset * 34);
+			assert nPointRead == nRecord * 16;
+			assert nBodyRead == nRecord * 34;
+			
+			pointBuffer.position(0);
+			LongBuffer pointBufferL = pointBuffer.asLongBuffer();
+			
+			for (int i = 0; i < nRecord; i++) {
+				long t = pointBufferL.get();
+				long a = pointBufferL.get();
 				
-				pointBuffer.position(0);
-				LongBuffer pointBufferL = pointBuffer.asLongBuffer();
-				
-				for (int i = 0; i < nRecord; i++) {
-					long t = pointBufferL.get();
-					long a = pointBufferL.get();
-					
-					if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
-						byte body[] = new byte[34];
-						bodyBuffer.position(i * 34);
-						bodyBuffer.get(body);
-						result.add(new Message(a, t, body));
-					}
+				if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
+					byte body[] = new byte[34];
+					bodyBuffer.position(i * 34);
+					bodyBuffer.get(body);
+					result.add(new Message(a, t, body));
 				}
-	    	}
+			}
+
     		
 		} catch (IOException e) {
 			e.printStackTrace();
@@ -731,16 +731,16 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	long aAxisIORecords;
     }
     
-    private static void queryAverageAxisT(AverageResult result, int tSliceId, int aSliceLow, int aSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
+    private static void queryAverageSliceA(AverageResult result, int aSliceId, int tSliceLow, int tSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
-		int baseOffset = blockOffsetTableAxisT[tSliceId][aSliceLow];
-		int nRecord = blockOffsetTableAxisT[tSliceId][aSliceHigh] + blockCountTable[tSliceId][aSliceHigh] - baseOffset;
-		result.tAxisIOCount++;
-		result.tAxisIORecords += nRecord;
+		int baseOffset = blockOffsetTableAxisA[tSliceLow][aSliceId];
+		int nRecord = blockOffsetTableAxisA[tSliceHigh + 1][aSliceId] - baseOffset;
+		result.aAxisIOCount++;
+		result.aAxisIORecords += nRecord;
 		
 		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
-		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
+		aAxisIndexChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
 		LongBuffer pointBufferL = pointBuffer.asLongBuffer();
 		
@@ -765,12 +765,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    	System.out.println(String.format("(%d %d %d %d)", tMin, tMax, aMin, aMax));
     			
     	int baseOffsetLow = blockOffsetTableAxisA[tSliceLow][aSliceLow];
-		int nRecordLow = blockOffsetTableAxisA[tSliceHigh][aSliceLow] + blockCountTable[tSliceHigh][aSliceLow] - baseOffsetLow;
+		int nRecordLow = blockOffsetTableAxisA[tSliceHigh + 1][aSliceLow] - baseOffsetLow;
 		result.aAxisIOCount++;
 		result.aAxisIORecords += nRecordLow;
 		
 		int baseOffsetHigh = blockOffsetTableAxisA[tSliceLow][aSliceHigh];
-		int nRecordHigh = blockOffsetTableAxisA[tSliceHigh][aSliceHigh] + blockCountTable[tSliceHigh][aSliceHigh] - baseOffsetHigh;
+		int nRecordHigh = blockOffsetTableAxisA[tSliceHigh + 1][aSliceHigh] - baseOffsetHigh;
 		result.aAxisIOCount++;
 		result.aAxisIORecords += nRecordHigh;
 		
@@ -876,25 +876,30 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     	AverageResult result = new AverageResult();
     	
-//    	try {
-//	    	if (tSliceLow == tSliceHigh) {
-//	    		// 在同一个t块内，只能暴力
-//	    		queryAverageAxisT(result, tSliceLow, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
-//	    		
-//	    	} else {
-//	    		queryAverageAxisT(result, tSliceLow, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
-//	    		queryAverageAxisT(result, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+    	System.out.println(String.format("block: t[%d %d] a[%d %d]", tSliceLow, tSliceHigh, aSliceLow, aSliceHigh));  
+    	try {
+	    	if (aSliceLow == aSliceHigh) {
+	    		// 在同一个a块内，只能暴力
+	    		queryAverageSliceA(result, aSliceLow, tSliceLow, tSliceHigh, tMin, tMax, aMin, aMax);
+	    		
+	    	} else {
+	    		
+	    		for (int i = aSliceLow; i <= aSliceHigh; i++) {
+	    			queryAverageSliceA(result, i, tSliceLow, tSliceHigh, tMin, tMax, aMin, aMax);
+	    		}
+//	    		queryAverageSliceA(result, tSliceLow, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+//	    		queryAverageSliceA(result, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
 //	    		tSliceLow++;
 //	    		tSliceHigh--;
 //	    		if (tSliceLow <= tSliceHigh) {
 //	    			queryAverageAxisA(result, aSliceLow, aSliceHigh, tSliceLow, tSliceHigh, tMin, tMax, aMin, aMax);
 //	    		}
-//	    	}
-//	    	
-//		} catch (IOException e) {
-//			e.printStackTrace();
-//			System.exit(-1);
-//		}
+	    	}
+	    	
+		} catch (IOException e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
     	
     	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [t %d; a %d (%f)] (%d %d %d %d) => %d (t %d %d) (a %d %d)", tMax-tMin, aMax-aMin, (double)(aMax-aMin)/(globalMaxA - globalMinA), tMin, tMax, aMin, aMax, result.cnt, result.tAxisIOCount, result.tAxisIORecords, result.aAxisIOCount, result.aAxisIORecords));
     	
