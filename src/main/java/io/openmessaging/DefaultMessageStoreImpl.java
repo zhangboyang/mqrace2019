@@ -61,11 +61,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		System.out.println("======== END OF FILE ========");
 	}
 	
-	static {
-    	//printFile("/proc/cpuinfo");
-    	printFile("/proc/meminfo");
-    	System.out.println("Working Directory = " + System.getProperty("user.dir"));
-	}
+//	static {
+//    	printFile("/proc/cpuinfo");
+//    	printFile("/proc/meminfo");
+//    	System.out.println("Working Directory = " + System.getProperty("user.dir"));
+//	}
 	
 	private static String dumpMessage(Message message)
 	{
@@ -318,7 +318,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static void buildIndexForRangeAxisA(int tSliceFrom, int tSliceTo) throws IOException
     {
-    	System.out.println("[" + new Date() + "]: " + String.format("from=%d to=%d", tSliceFrom, tSliceTo));
+//    	System.out.println("[" + new Date() + "]: " + String.format("from=%d to=%d", tSliceFrom, tSliceTo));
     	
     	int nRecord = tSliceRecordOffset[tSliceTo + 1] - tSliceRecordOffset[tSliceFrom];
     	reserveIndexByteBuffer(nRecord * 16);
@@ -471,9 +471,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		putWriteBuffer(message);
 		
     	insCount++;
-    	if (insCount % 1000000 == 0) {
-			System.out.println("[" + new Date() + "]: " + String.format("ins %d: %s", insCount, dumpMessage(message)));
-		}
+//    	if (insCount % 1000000 == 0) {
+//			System.out.println("[" + new Date() + "]: " + String.format("ins %d: %s", insCount, dumpMessage(message)));
+//		}
     }
     
     private static void postInsertProcess() throws IOException
@@ -743,7 +743,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		Collections.sort(result, tComparator);
 
-		System.out.println("[" + new Date() + "]: " + String.format("queryData: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.size()));
+//		System.out.println("[" + new Date() + "]: " + String.format("queryData: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.size()));
 
     	return result;
     }
@@ -900,7 +900,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     	AverageResult result = new AverageResult();
     	
-    	System.out.println(String.format("block: t[%d %d] a[%d %d]", tSliceLow, tSliceHigh, aSliceLow, aSliceHigh));  
+//    	System.out.println(String.format("block: t[%d %d] a[%d %d]", tSliceLow, tSliceHigh, aSliceLow, aSliceHigh));  
     	try {
 	    	if (aSliceLow == aSliceHigh) {
 	    		// 在同一个a块内，只能暴力
@@ -926,7 +926,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
     	
-    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [t %d; a %d (%f)] (%d %d %d %d) => %d (t %d %d) (a %d %d)", tMax-tMin, aMax-aMin, (double)(aMax-aMin)/(globalMaxA - globalMinA), tMin, tMax, aMin, aMax, result.cnt, result.tAxisIOCount, result.tAxisIORecords, result.aAxisIOCount, result.aAxisIORecords));
+//    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [t %d; a %d (%f)] (%d %d %d %d) => %d (t %d %d) (a %d %d)", tMax-tMin, aMax-aMin, (double)(aMax-aMin)/(globalMaxA - globalMinA), tMin, tMax, aMin, aMax, result.cnt, result.tAxisIOCount, result.tAxisIORecords, result.aAxisIOCount, result.aAxisIORecords));
     	
     	
     	totalAvgQuery.incrementAndGet();
