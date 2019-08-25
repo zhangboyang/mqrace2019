@@ -137,7 +137,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
 
     private static final int MAXMSG = 2100000000;
-    private static final int N_TSLICE = 200000;
+    private static final int N_TSLICE = 100000;
     private static final int N_ASLICE = 100;
     
     private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
@@ -214,7 +214,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     
-    private static final int READBUFSZ = 512;
+    private static final int READBUFSZ = 1280;
     
     private static final int readPtr[] = new int[N_TSLICE];
     
@@ -281,9 +281,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			}
     			int offsetHigh = writeBufferPtr;
     			
-    			// 对当前小块进行排序
-    			Arrays.sort(writeBuffer, offsetLow, offsetHigh, tComparator); // 每小块各自sort更快，不用一大块sort
-    			
+    			// 当前小块已按照a排好序
     			// 对当前小块计算前缀和
     			long prefixSum = blockPrefixSumBaseTable[tSliceId][aSliceId];
     			for (int i = offsetLow; i < offsetHigh; i++) {
@@ -770,6 +768,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static void queryAverageAxisA(AverageResult result, int aSliceLow, int aSliceHigh, int tSliceLow, int tSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
+//    	for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
+//    		queryAverageAxisT(result, tSliceId, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+//    	}
+//    	if (true) return;
+//    	System.out.println(String.format("(%d %d %d %d)", tMin, tMax, aMin, aMax));
+    			
     	int baseOffsetLow = blockOffsetTableAxisA[tSliceLow][aSliceLow];
 		int nRecordLow = blockOffsetTableAxisA[tSliceHigh][aSliceLow] + blockCountTable[tSliceHigh][aSliceLow] - baseOffsetLow;
 		
@@ -792,29 +796,38 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		int lowOffset = 0;
 		int highOffset = 0;
 		for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
+			
 			int lowCount = blockCountTable[tSliceId][aSliceLow];
 			int highCount = blockCountTable[tSliceId][aSliceHigh];
 			
-			long lowSum = blockPrefixSumBaseTable[tSliceId][aSliceLow];
+			long lastPrefixSum = blockPrefixSumBaseTable[tSliceId][aSliceLow];
+			long lowSum = lastPrefixSum;
 			int lowPtr = -1;
-			for (int i = lowOffset; i < lowOffset + lowCount; i++) { // FIXME: 二分
-				long t = lowBufferL.get(i * 2);
-				if (t < tMin) {
-					lowSum = lowBufferL.get(i * 2 + 1);
-					lowPtr = i;
+			for (int i = lowOffset; i < lowOffset + lowCount; i++) {
+				long prefixSum = lowBufferL.get(i * 2 + 1);
+				long a = prefixSum - lastPrefixSum;
+				lastPrefixSum = prefixSum;
+//				System.out.println(String.format("low t=%d a=%d", lowBufferL.get(i * 2), a));
+				if (a < aMin) {
+					lowSum = prefixSum;
+					lowPtr = i - lowOffset;
 				} else {
 					break;
 				}
 			}
 			lowPtr++;
 			
-			long highSum = blockPrefixSumBaseTable[tSliceId][aSliceHigh];
+			lastPrefixSum = blockPrefixSumBaseTable[tSliceId][aSliceHigh];
+			long highSum = lastPrefixSum;
 			int highPtr = -1;
 			for (int i = highOffset; i < highOffset + highCount; i++) {
-				long t = highBufferL.get(i * 2);
-				if (t <= tMax) {
-					highPtr = i;
+				long prefixSum = highBufferL.get(i * 2 + 1);
+				long a = prefixSum - lastPrefixSum;
+//				System.out.println(String.format("high t=%d a=%d", highBufferL.get(i * 2), a));
+				lastPrefixSum = prefixSum;
+				if (a <= aMax) {
 					highSum = highBufferL.get(i * 2 + 1);
+					highPtr = i - highOffset;
 				}
 			}
 			
@@ -822,10 +835,24 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			int globalLowPtr = blockOffsetTableAxisT[tSliceId][aSliceLow] + lowPtr;
 			int globalHighPtr = blockOffsetTableAxisT[tSliceId][aSliceHigh] + highPtr;
 			
+			long sum = 0;
+			int cnt = 0;
 			if (globalHighPtr >= globalLowPtr) {
-				result.sum += highSum - lowSum;
-				result.cnt += globalHighPtr - globalLowPtr + 1;
+				sum = highSum - lowSum;
+				cnt = globalHighPtr - globalLowPtr + 1;
 			}
+			
+			result.sum += sum;
+			result.cnt += cnt;
+		
+//			AverageResult referenceResult = new AverageResult();
+//			queryAverageAxisT(referenceResult, tSliceId, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+////			System.out.println(String.format("tSliceId=%d ; aSliceLow=%d aSliceHigh=%d ; lowPtr=%d  highPtr=%d", tSliceId, aSliceLow, aSliceHigh, lowPtr, highPtr));
+////			System.out.println(String.format("cnt=%d sum=%d", cnt, sum));
+////			System.out.println(String.format("ref: cnt=%d sum=%d", referenceResult.cnt, referenceResult.sum));
+//			assert cnt == referenceResult.cnt;
+//			assert sum == referenceResult.sum;
+
 			
 			lowOffset += lowCount;
 			highOffset += highCount;
@@ -846,27 +873,27 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     	AverageResult result = new AverageResult();
     	
-//    	try {
-//	    	if (tSliceLow == tSliceHigh) {
-//	    		// 在同一个t块内，只能暴力
-//	    		queryAverageAxisT(result, tSliceLow, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
-//	    		
-//	    	} else {
-//	    		queryAverageAxisT(result, tSliceLow, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
-//	    		queryAverageAxisT(result, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
-//	    		tSliceLow++;
-//	    		tSliceHigh--;
-//	    		if (tSliceLow <= tSliceHigh) {
-//	    			queryAverageAxisA(result, aSliceLow, aSliceHigh, tSliceLow, tSliceHigh, tMin, tMax, aMin, aMax);
-//	    		}
-//	    	}
-//	    	
-//		} catch (IOException e) {
-//			e.printStackTrace();
-//			System.exit(-1);
-//		}
+    	try {
+	    	if (tSliceLow == tSliceHigh) {
+	    		// 在同一个t块内，只能暴力
+	    		queryAverageAxisT(result, tSliceLow, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+	    		
+	    	} else {
+	    		queryAverageAxisT(result, tSliceLow, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+	    		queryAverageAxisT(result, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+	    		tSliceLow++;
+	    		tSliceHigh--;
+	    		if (tSliceLow <= tSliceHigh) {
+	    			queryAverageAxisA(result, aSliceLow, aSliceHigh, tSliceLow, tSliceHigh, tMin, tMax, aMin, aMax);
+	    		}
+	    	}
+	    	
+		} catch (IOException e) {
+			e.printStackTrace();
+			System.exit(-1);
+		}
     	
-    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.cnt));
+//    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.cnt));
     	
     	
     	return result.cnt == 0 ? 0 : result.sum / result.cnt;
