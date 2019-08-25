@@ -13,6 +13,7 @@ import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 这是一个简单的基于内存的实现，以方便选手理解题意；
@@ -741,12 +742,20 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static class AverageResult {
     	long sum = 0;
     	int cnt = 0;
+    	
+    	long tAxisIOCount;
+    	long tAxisIORecords;
+    	
+    	long aAxisIOCount;
+    	long aAxisIORecords;
     }
     
     private static void queryAverageAxisT(AverageResult result, int tSliceId, int aSliceLow, int aSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
 		int baseOffset = blockOffsetTableAxisT[tSliceId][aSliceLow];
 		int nRecord = blockOffsetTableAxisT[tSliceId][aSliceHigh] + blockCountTable[tSliceId][aSliceHigh] - baseOffset;
+		result.tAxisIOCount++;
+		result.tAxisIORecords += nRecord;
 		
 		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
@@ -776,9 +785,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			
     	int baseOffsetLow = blockOffsetTableAxisA[tSliceLow][aSliceLow];
 		int nRecordLow = blockOffsetTableAxisA[tSliceHigh][aSliceLow] + blockCountTable[tSliceHigh][aSliceLow] - baseOffsetLow;
+		result.aAxisIOCount++;
+		result.aAxisIORecords += nRecordLow;
 		
 		int baseOffsetHigh = blockOffsetTableAxisA[tSliceLow][aSliceHigh];
 		int nRecordHigh = blockOffsetTableAxisA[tSliceHigh][aSliceHigh] + blockCountTable[tSliceHigh][aSliceHigh] - baseOffsetHigh;
+		result.aAxisIOCount++;
+		result.aAxisIORecords += nRecordHigh;
 		
 		ByteBuffer lowBuffer = ByteBuffer.allocate(nRecordLow * 16);
 		lowBuffer.order(ByteOrder.LITTLE_ENDIAN);
@@ -863,6 +876,15 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
 
+    
+    
+    private static AtomicInteger totalAvgQuery = new AtomicInteger();
+	private static AtomicLong tAxisIOCountTotal = new AtomicLong();
+	private static AtomicLong tAxisIORecordsTotal = new AtomicLong();
+	private static AtomicLong aAxisIOCountTotal = new AtomicLong();
+	private static AtomicLong aAxisIORecordsTotal = new AtomicLong();
+	
+	
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
     	
@@ -893,8 +915,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
     	
-//    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.cnt));
+    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [t %d; a %d (%f)] (%d %d %d %d) => %d (t %d %d) (a %d %d)", tMax-tMin, aMax-aMin, (double)(aMax-aMin)/(globalMaxA - globalMinA), tMin, tMax, aMin, aMax, result.cnt, result.tAxisIOCount, result.tAxisIORecords, result.aAxisIOCount, result.aAxisIORecords));
     	
+    	
+    	totalAvgQuery.incrementAndGet();
+    	tAxisIOCountTotal.addAndGet(result.tAxisIOCount);
+    	tAxisIORecordsTotal.addAndGet(result.tAxisIORecords);
+    	aAxisIOCountTotal.addAndGet(result.aAxisIOCount);
+    	aAxisIORecordsTotal.addAndGet(result.aAxisIORecords);
     	
     	return result.cnt == 0 ? 0 : result.sum / result.cnt;
     }
@@ -902,5 +930,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static void atShutdown()
     {
     	System.out.println("[" + new Date() + "]: shutdown hook");
+    	
+    	
+    	System.out.println(String.format("totalAvgQuery=%d", totalAvgQuery.get()));
+    	System.out.println(String.format("tAxisIOCountTotal=%d", tAxisIOCountTotal.get()));
+    	System.out.println(String.format("tAxisIORecordsTotal=%d", tAxisIORecordsTotal.get()));
+    	System.out.println(String.format("aAxisIOCountTotal=%d", aAxisIOCountTotal.get()));
+    	System.out.println(String.format("aAxisIORecordsTotal=%d", aAxisIORecordsTotal.get()));
     }
 }
