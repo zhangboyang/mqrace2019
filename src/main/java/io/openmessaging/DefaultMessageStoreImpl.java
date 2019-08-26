@@ -157,7 +157,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
 
     private static final int MAXMSG = 2100000000;
-    private static final int N_TSLICE = 1000000;
+    private static final int N_TSLICE = 2000000;
     private static final int N_ASLICE = 60;
     
     private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
