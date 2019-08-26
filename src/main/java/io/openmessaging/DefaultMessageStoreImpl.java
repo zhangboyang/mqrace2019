@@ -1,6 +1,5 @@
 package io.openmessaging;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
@@ -175,9 +174,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final long blockPrefixSumBaseTable[][] = new long[N_TSLICE][N_ASLICE];
     
     private static int insCount = 0;
-    private static int tAxisWriteCount = 0;
-    private static int aAxisWriteCount = 0;
-
     
     private static long globalMaxA = Long.MIN_VALUE;
     private static long globalMinA = Long.MAX_VALUE;
@@ -439,7 +435,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				break;
 			}
 			
-			tAxisWriteCount++;
 			pointBuffer.putLong(curMessage.getT());
 			pointBuffer.putLong(curMessage.getA());
 			bodyBuffer.put(curMessage.getBody());
@@ -476,12 +471,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //		}
     }
     
-    private static void postInsertProcess() throws IOException
+    private static void buildIndex() throws IOException
     {
-    	flushWriteBuffer(Long.MAX_VALUE);
-    	tSlicePivot[tSliceCount] = Long.MAX_VALUE;
-    	assert writeBufferPtr == 0;
-    	
     	// 计算各个块在文件中的偏移
     	for (int i = 0; i <= tSliceCount; i++) {
     		if (i > 0) {
@@ -529,6 +520,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	boolean threadExited[] = new boolean[nThread];
 
     	try {
+    		
+    		// 合并排序
         	for (int i = 0; i < nThread; i++) {
         		buffer[i] = insertQueue[i].take();
         		bufptr[i] = 0;
@@ -573,7 +566,15 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	    		}
 	    	}
 	    	
-	    	postInsertProcess();
+	    	
+	    	// 刷掉写缓存
+	    	flushWriteBuffer(Long.MAX_VALUE);
+	    	tSlicePivot[tSliceCount] = Long.MAX_VALUE;
+	    	assert writeBufferPtr == 0;
+	    	writeBuffer = null;
+	    	
+	    	// 建立索引
+	    	buildIndex();
 	    	
 	    } catch (InterruptedException | IOException e) {
 			e.printStackTrace();
@@ -680,8 +681,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 					}
     				
     				System.out.println(String.format("insCount=%d", insCount));
-    				System.out.println(String.format("tAxisWriteCount=%d", tAxisWriteCount));
-    				System.out.println(String.format("aAxisWriteCount=%d", aAxisWriteCount));
     				System.out.println(String.format("globalMinA=%d", globalMinA));
     				System.out.println(String.format("globalMaxA=%d", globalMaxA));
     				
@@ -698,8 +697,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	int tSliceLow = findSliceT(tMin);
     	int tSliceHigh = findSliceT(tMax);
-    	int aSliceLow = findSliceA(aMin);
-    	int aSliceHigh = findSliceA(aMax);
     	
     	
 		try {
@@ -741,7 +738,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
 		
-		Collections.sort(result, tComparator);
+//		Collections.sort(result, tComparator);
 
 //		System.out.println("[" + new Date() + "]: " + String.format("queryData: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.size()));
 
