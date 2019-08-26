@@ -997,6 +997,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	assert optimalPlanId >= 0;
     	
+    	optimalPlanId = 1;
     	return optimalPlanId;
     }
     
