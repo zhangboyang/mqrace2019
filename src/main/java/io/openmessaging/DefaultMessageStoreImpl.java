@@ -750,7 +750,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
-    private static final int MAXPLAN = 3;
+    private static final int MAXPLAN = 2;
     private static final double IOSIZE_FACTOR = 20 * 1024; // SSD速度为 200MB/s 10000IOPS  这样算每个IO大约20KB
     
     private static class AverageResult {
@@ -768,7 +768,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int curPlan;
     	double ioCost[] = new double[MAXPLAN];
     	
-    	void addIOCost(int nBytes)
+    	void addIOCost(long nBytes)
     	{
     		// 若IO字节数太小，则按IO次数为1计算代价
     		// 若IO字节数太大，则把IO字节数换算成IO次数，计算代价
@@ -778,13 +778,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     ////////////////////////////////////////////////////////////////////////////////////////
+    // 算法0：查询矩形的四个边
     
     private static void queryAverageSliceA(AverageResult result, boolean doRealQuery, int aSliceId, int tSliceLow, int tSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
 		int baseOffset = blockOffsetTableAxisA[tSliceLow][aSliceId];
 		int nRecord = blockOffsetTableAxisA[tSliceHigh + 1][aSliceId] - baseOffset;
 		
-		result.addIOCost(nRecord * 16);
+		result.addIOCost((long)nRecord * 16);
 		if (!doRealQuery) return;
 		result.aAxisIOCount++;
 		result.aAxisIOBytes += nRecord * 16;
@@ -822,8 +823,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		int baseOffsetHigh = blockOffsetTableAxisT[tSliceHigh][aSliceLow];
 		int nRecordHigh = blockOffsetTableAxisT[tSliceHigh][aSliceHigh + 1] - baseOffsetHigh;
 
-		result.addIOCost(nRecordLow * 16);
-		result.addIOCost(nRecordHigh * 16);
+		result.addIOCost((long)nRecordLow * 16);
+		result.addIOCost((long)nRecordHigh * 16);
 		if (!doRealQuery) return;
 		result.tAxisIOCount++;
 		result.tAxisIOBytes += nRecordLow * 16;
@@ -926,6 +927,43 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
+    
+    
+	////////////////////////////////////////////////////////////////////////////////////////
+	// 算法1：对t轴上的分块进行暴力查找
+    
+    private static void queryAlgorithm1(AverageResult result, boolean doRealQuery, int tSliceLow, int tSliceHigh, int aSliceLow, int aSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
+    {
+		int baseOffset = tSliceRecordOffset[tSliceLow];
+		int nRecord = tSliceRecordOffset[tSliceHigh + 1] - tSliceRecordOffset[tSliceLow];
+		
+		result.addIOCost((long)nRecord * 16);
+		if (!doRealQuery) return;
+		result.tAxisIOCount++; // FIXME: 其实这里读取的不是Index文件，应分开统计
+		result.tAxisIOBytes += nRecord * 16;
+		
+		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
+		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
+		pointBuffer.position(0);
+		LongBuffer pointBufferL = pointBuffer.asLongBuffer();
+		
+		for (int i = 0; i < nRecord; i++) {
+			long t = pointBufferL.get();
+			long a = pointBufferL.get();
+			
+			if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
+				result.sum += a;
+				result.cnt++;
+			}
+		}
+    }
+    
+    
+    
+    
+    
+    
     ////////////////////////////////////////////////////////////////////////////////////////
 
     ///// 查询执行器：给定算法Id号，执行对应的查询
@@ -936,8 +974,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	switch (planId) {
     	case 0: queryAlgorithm0(result, doRealQuery, tSliceLow, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax); break;
-    	case 1: queryAlgorithm0(result, doRealQuery, tSliceLow, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax); break;
-    	case 2: queryAlgorithm0(result, doRealQuery, tSliceLow, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax); break;
+    	case 1: queryAlgorithm1(result, doRealQuery, tSliceLow, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax); break;
     	default: assert false;
     	}
     }
@@ -1000,7 +1037,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
     	
-    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [t %d; a %d (%f)]; (%d %d %d %d) => cnt=%d; plan=%d [%f %f %f]; (t %d %d) (a %d %d)", tMax-tMin, aMax-aMin, (double)(aMax-aMin)/(globalMaxA - globalMinA), tMin, tMax, aMin, aMax, result.cnt, result.curPlan, result.ioCost[0], result.ioCost[1], result.ioCost[2], result.tAxisIOCount, result.tAxisIOBytes, result.aAxisIOCount, result.aAxisIOBytes));
+    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [t %d; a %d (%f)]; (%d %d %d %d) => cnt=%d; plan=%d [%f %f]; (t %d %d) (a %d %d)", tMax-tMin, aMax-aMin, (double)(aMax-aMin)/(globalMaxA - globalMinA), tMin, tMax, aMin, aMax, result.cnt, result.curPlan, result.ioCost[0], result.ioCost[1], result.tAxisIOCount, result.tAxisIOBytes, result.aAxisIOCount, result.aAxisIOBytes));
     	
     	
     	totalAvgQuery.incrementAndGet();
