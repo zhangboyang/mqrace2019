@@ -62,11 +62,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		System.out.println("======== END OF FILE ========");
 	}
 	
-//	static {
-//    	printFile("/proc/cpuinfo");
-//    	printFile("/proc/meminfo");
-//    	System.out.println("Working Directory = " + System.getProperty("user.dir"));
-//	}
+	static {
+    	printFile("/proc/cpuinfo");
+    	printFile("/proc/meminfo");
+    	printFile("/proc/mounts");
+    	System.out.println("Working Directory = " + System.getProperty("user.dir"));
+	}
 	
 	private static String dumpMessage(Message message)
 	{
@@ -98,8 +99,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
 //    private static final String storagePath = "./";
     private static final String storagePath = "/alidata1/race2019/data/";
-    private static final int MAXMSG = 2100000000;
-    
     
     private static final String tAxisPointFile = storagePath + "tAxis.point.data";
     private static final String tAxisBodyFile = storagePath + "tAxis.body.data";
@@ -121,15 +120,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	RandomAccessFile tpFile, tbFile, aIndexFile, tIndexFile;
     	FileChannel tpChannel, tbChannel, aIndexChannel, tIndexChannel;
     	try {
-
 			tpFile = new RandomAccessFile(tAxisPointFile, "rw");
-			tpFile.setLength((long)MAXMSG * 16);                  // FIXME: 是否会造成文件在磁盘上存储不连续？
+			tpFile.setLength(0);
 			tbFile = new RandomAccessFile(tAxisBodyFile, "rw");
-			tbFile.setLength((long)MAXMSG * 34);
+			tbFile.setLength(0);
 			aIndexFile = new RandomAccessFile(aAxisIndexFile, "rw");
-			aIndexFile.setLength((long)MAXMSG * 16);
+			aIndexFile.setLength(0);
 			tIndexFile = new RandomAccessFile(tAxisIndexFile, "rw");
-			tIndexFile.setLength((long)MAXMSG * 16);
+			tIndexFile.setLength(0);
 			
 			tpChannel = FileChannel.open(Paths.get(tAxisPointFile));
 			tbChannel = FileChannel.open(Paths.get(tAxisBodyFile));
@@ -159,7 +157,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
 
-    
+    private static final int MAXMSG = 2100000000;
     private static final int N_TSLICE = 2000000;
     private static final int N_ASLICE = 60;
     
@@ -375,6 +373,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	System.out.println("[" + new Date() + "]: build index for a-axis");
     	
     	tAxisPointData.seek(0);
+    	aAxisIndexData.setLength(tAxisPointData.length()); // FIXME: 是否会造成文件在磁盘上存储不连续？
     	
     	for (int tSliceId = 0; tSliceId <= tSliceCount; tSliceId += BATCHSIZE) {
     		buildIndexForRangeAxisA(tSliceId, Math.min(tSliceId + BATCHSIZE, tSliceCount) - 1);
