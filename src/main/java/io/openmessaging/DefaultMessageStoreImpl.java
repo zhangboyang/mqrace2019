@@ -102,8 +102,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	});
     }
     
-//    private static final String storagePath = "./";
-    private static final String storagePath = "/alidata1/race2019/data/";
+    private static final String storagePath = "./";
+//    private static final String storagePath = "/alidata1/race2019/data/";
     
     private static final String tAxisPointFile = storagePath + "tAxis.point.data";
     private static final String tAxisBodyFile = storagePath + "tAxis.body.data";
@@ -603,7 +603,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final int MAXBUFFER = 2000;
     private static class PutThreadLocalData {
-    	DeflaterOutputStream deflaterOutputStream;
+//    	DeflaterOutputStream deflaterOutputStream;
+    	BufferedOutputStream bufferedOutputStream;
     	ByteBuffer msgdata;
     	
     	int threadId;
@@ -621,10 +622,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
         	
         	try {
         		pd.outputStream = new FileOutputStream(pd.outputFileName);
-        		Deflater z = new Deflater();
-        		z.setLevel(1);
-        		z.setStrategy(Deflater.FILTERED);
-				pd.deflaterOutputStream = new DeflaterOutputStream(pd.outputStream, z);
+        		pd.bufferedOutputStream = new BufferedOutputStream(pd.outputStream);
+//        		Deflater z = new Deflater();
+//        		z.setLevel(1);
+//        		z.setStrategy(Deflater.FILTERED);
+//				pd.deflaterOutputStream = new DeflaterOutputStream(pd.outputStream, z);
 			} catch (IOException e) {
 				e.printStackTrace();
 				System.exit(-1);
@@ -663,8 +665,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		pd.msgdata.putLong(message.getA());
     		pd.msgdata.put(message.getBody());
 
-    		pd.deflaterOutputStream.write(pd.msgdata.array());
-//    		pd.outputStream.write(pd.msgdata.array());
+    		pd.bufferedOutputStream.write(pd.msgdata.array());
     		
 		} catch (IOException e) {
 			e.printStackTrace();
