@@ -126,28 +126,24 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	});
     }
     
-    private static final String storagePath = "./";
-//    private static final String storagePath = "/alidata1/race2019/data/";
+//    private static final String storagePath = "./";
+    private static final String storagePath = "/alidata1/race2019/data/";
     
     private static final String tAxisPointFile = storagePath + "tAxis.point.data";
     private static final String tAxisBodyFile = storagePath + "tAxis.body.data";
-    
     private static final String aAxisIndexFile = storagePath + "aAxis.index.data";
-    private static final String tAxisIndexFile = storagePath + "tAxis.index.data";
     
     private static final RandomAccessFile tAxisPointData;
     private static final RandomAccessFile tAxisBodyData;
     private static final RandomAccessFile aAxisIndexData;
-    private static final RandomAccessFile tAxisIndexData;
     
     private static final FileChannel tAxisPointChannel;
     private static final FileChannel tAxisBodyChannel;
     private static final FileChannel aAxisIndexChannel;
-    private static final FileChannel tAxisIndexChannel;
     
     static {
-    	RandomAccessFile tpFile, tbFile, aIndexFile, tIndexFile;
-    	FileChannel tpChannel, tbChannel, aIndexChannel, tIndexChannel;
+    	RandomAccessFile tpFile, tbFile, aIndexFile;
+    	FileChannel tpChannel, tbChannel, aIndexChannel;
     	try {
 			tpFile = new RandomAccessFile(tAxisPointFile, "rw");
 			tpFile.setLength(0);
@@ -155,34 +151,27 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			tbFile.setLength(0);
 			aIndexFile = new RandomAccessFile(aAxisIndexFile, "rw");
 			aIndexFile.setLength(0);
-			tIndexFile = new RandomAccessFile(tAxisIndexFile, "rw");
-			tIndexFile.setLength(0);
 			
 			tpChannel = FileChannel.open(Paths.get(tAxisPointFile));
 			tbChannel = FileChannel.open(Paths.get(tAxisBodyFile));
 			aIndexChannel = FileChannel.open(Paths.get(aAxisIndexFile));
-			tIndexChannel = FileChannel.open(Paths.get(tAxisIndexFile));
 			
 		} catch (IOException e) {
 			tpFile = null;
 			tbFile = null;
 			aIndexFile = null;
-			tIndexFile = null;
 			tpChannel = null;
 			tbChannel = null;
 			aIndexChannel = null;
-			tIndexChannel = null;
 			e.printStackTrace();
 			System.exit(-1);
 		}
     	tAxisPointData = tpFile;
     	tAxisBodyData = tbFile;
     	aAxisIndexData = aIndexFile;
-    	tAxisIndexData = tIndexFile;
         tAxisPointChannel = tpChannel;
         tAxisBodyChannel = tbChannel;
         aAxisIndexChannel = aIndexChannel;
-        tAxisIndexChannel = tIndexChannel;
     }
     
 
@@ -246,22 +235,20 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
-    private static ByteBuffer indexByteBuffer = null;
-    private static void reserveIndexByteBuffer(int nBytes)
+    private static ByteBuffer indexReadBuffer = null;
+    private static void reserveIndexReadBuffer(int nBytes)
     {
-    	if (indexByteBuffer == null || indexByteBuffer.capacity() < nBytes) {
-    		indexByteBuffer = ByteBuffer.allocate(nextSize(nBytes));
-    		indexByteBuffer.order(ByteOrder.LITTLE_ENDIAN);
+    	if (indexReadBuffer == null || indexReadBuffer.capacity() < nBytes) {
+    		indexReadBuffer = ByteBuffer.allocate(nextSize(nBytes));
+    		indexReadBuffer.order(ByteOrder.LITTLE_ENDIAN);
     	}
     }
-    private static Message indexMsgBuffer[] = null;
-    private static void reserveMsgBuffer(int nMsg)
+    private static ByteBuffer indexWriteBuffer = null;
+    private static void reserveIndexWriteBuffer(int nBytes)
     {
-    	if (indexMsgBuffer == null || indexMsgBuffer.length < nMsg) {
-    		indexMsgBuffer = new Message[nextSize(nMsg)];
-    		for (int i = 0; i < indexMsgBuffer.length; i++) {
-    			indexMsgBuffer[i] = new Message(0, 0, null);
-    		}
+    	if (indexWriteBuffer == null || indexWriteBuffer.capacity() < nBytes) {
+    		indexWriteBuffer = ByteBuffer.allocate(nextSize(nBytes));
+    		indexWriteBuffer.order(ByteOrder.LITTLE_ENDIAN);
     	}
     }
     
@@ -272,20 +259,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    	System.out.println("[" + new Date() + "]: " + String.format("from=%d to=%d", tSliceFrom, tSliceTo));
     	
     	int nRecord = tSliceRecordOffset[tSliceTo + 1] - tSliceRecordOffset[tSliceFrom];
-    	reserveIndexByteBuffer(nRecord * 16);
-    	reserveMsgBuffer(nRecord);
+    	reserveIndexReadBuffer(nRecord * 16);
+    	reserveIndexWriteBuffer(nRecord * 8);
     	
     	assert tAxisPointData.getFilePointer() == (long)tSliceRecordOffset[tSliceFrom] * 16;
-    	tAxisPointData.readFully(indexByteBuffer.array(), 0, nRecord * 16);
-    	indexByteBuffer.position(0);
-		LongBuffer indexLongBuffer = indexByteBuffer.asLongBuffer();
+    	tAxisPointData.readFully(indexReadBuffer.array(), 0, nRecord * 16);
+    	indexReadBuffer.position(0);
+		LongBuffer indexReadBufferL = indexReadBuffer.asLongBuffer();
 		
-		for (int i = 0; i < nRecord; i++) {
-			long t = indexLongBuffer.get();
-			long a = indexLongBuffer.get();
-			indexMsgBuffer[i].setT(t);
-			indexMsgBuffer[i].setA(a);
-		}
+		indexWriteBuffer.position(0);
+		LongBuffer indexWriteBufferL = indexWriteBuffer.asLongBuffer();
+
 		
 		int sliceRecordCount[] = new int[N_ASLICE];
 		int bufferBase[] = new int[N_ASLICE];
@@ -298,25 +282,31 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		int msgPtr = 0;
 		for (int tSliceId = tSliceFrom; tSliceId <= tSliceTo; tSliceId++) {
-			// t块内部按a排序
-			Arrays.sort(indexMsgBuffer, tSliceRecordOffset[tSliceId] - tSliceRecordOffset[tSliceFrom], tSliceRecordOffset[tSliceId + 1] - tSliceRecordOffset[tSliceFrom], aComparator);
+			
+			long prefixSum = 0;
 			
 			for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
 				int msgCnt = blockCountTable[tSliceId][aSliceId];
 				
+				blockPrefixSumBaseTable[tSliceId][aSliceId] = prefixSum;
+				
 				int putBase = bufferBase[aSliceId] + blockOffsetTableAxisA[tSliceId][aSliceId] - blockOffsetTableAxisA[tSliceFrom][aSliceId];
-				for (int i = 0; i < msgCnt; i++) { 
-					Message msg = indexMsgBuffer[msgPtr++];
-					indexLongBuffer.put((putBase + i) * 2, msg.getT());
-					indexLongBuffer.put((putBase + i) * 2 + 1, msg.getA());
+				for (int i = putBase; i < putBase + msgCnt; i++) {
+					
+					
+					long curA = indexReadBufferL.get((msgPtr++ * 2) + 1);
+					prefixSum += curA;
+					
+					
+					indexWriteBufferL.put(i, prefixSum);
 				}
 			}
 		}
 		assert msgPtr == nRecord;
 		
 		for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
-			aAxisIndexData.seek((long)blockOffsetTableAxisA[tSliceFrom][aSliceId] * 16);
-			aAxisIndexData.write(indexByteBuffer.array(), bufferBase[aSliceId] * 16, sliceRecordCount[aSliceId] * 16);
+			aAxisIndexData.seek((long)blockOffsetTableAxisA[tSliceFrom][aSliceId] * 8);
+			aAxisIndexData.write(indexWriteBuffer.array(), bufferBase[aSliceId] * 8, sliceRecordCount[aSliceId] * 8);
 		}
     }
     
@@ -333,8 +323,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	System.out.println("[" + new Date() + "]: a-axis index finished");
     	
-    	indexByteBuffer = null;
-    	indexMsgBuffer = null;
+    	indexReadBuffer = null;
+    	indexWriteBuffer = null;
     }
     
     private static void buildOffsetTable()
@@ -384,7 +374,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	tAxisPointData.close();
     	tAxisBodyData.close();
     	aAxisIndexData.close();
-    	tAxisIndexData.close();
     }
     
     
@@ -425,10 +414,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		
     		System.arraycopy(writeBuffer, n, writeBuffer2, 0, m);
     		System.arraycopy(writeBuffer, 0, writeBuffer2, m, n);
-    		
-    		Message t[] = writeBuffer;
-    		writeBuffer = writeBuffer2;
-    		writeBuffer2 = t;
+    		System.arraycopy(writeBuffer2, 0, writeBuffer, 0, writeBufferPtr);
     	}
     	writeBufferPtr -= n;
     }
@@ -893,19 +879,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
     ////////////////////////////////////////////////////////////////////////////////////////
     // 算法0：查询矩形的四个边
     
-    private static void queryAverageSliceA(AverageResult result, boolean doRealQuery, int aSliceId, int tSliceLow, int tSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
+    private static void queryAverageSliceT(AverageResult result, boolean doRealQuery, int tSliceId, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
-		int baseOffset = blockOffsetTableAxisA[tSliceLow][aSliceId];
-		int nRecord = blockOffsetTableAxisA[tSliceHigh + 1][aSliceId] - baseOffset;
+		int baseOffset = tSliceRecordOffset[tSliceId];
+		int nRecord = tSliceRecordCount[tSliceId];
 		
 		result.addIOCost((long)nRecord * 16);
 		if (!doRealQuery) return;
-		result.aAxisIOCount++;
-		result.aAxisIOBytes += nRecord * 16;
+		result.tAxisIOCount++; // FIXME: 其实这里读取的不是Index文件，应分开统计
+		result.tAxisIOBytes += nRecord * 16;
 		
 		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
-		aAxisIndexChannel.read(pointBuffer, (long)baseOffset * 16);
+		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
 		LongBuffer pointBufferL = pointBuffer.asLongBuffer();
 		
@@ -921,56 +907,60 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     
-    private static void queryAverageAxisT(AverageResult result, boolean doRealQuery, int tSliceLow, int tSliceHigh, int aSliceLow, int aSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
+    private static void queryAverageSliceA(AverageResult result, boolean doRealQuery, int tSliceLow, int tSliceHigh, int aSliceLow, int aSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
 //    	for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
-//    		queryAverageAxisT(result, tSliceId, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+//    		queryAverageSliceT(result, doRealQuery, tSliceId, tMin, tMax, aMin, aMax);
 //    	}
 //    	if (true) return;
 //    	System.out.println(String.format("(%d %d %d %d)", tMin, tMax, aMin, aMax));
-    			
-    	int baseOffsetLow = blockOffsetTableAxisT[tSliceLow][aSliceLow];
-		int nRecordLow = blockOffsetTableAxisT[tSliceLow][aSliceHigh + 1] - baseOffsetLow;
+
+    	int baseOffsetLow = blockOffsetTableAxisA[tSliceLow][aSliceLow];
+		int nRecordLow = blockOffsetTableAxisA[tSliceHigh][aSliceLow] + blockCountTable[tSliceHigh][aSliceLow] - baseOffsetLow;
 
 		
-		int baseOffsetHigh = blockOffsetTableAxisT[tSliceHigh][aSliceLow];
-		int nRecordHigh = blockOffsetTableAxisT[tSliceHigh][aSliceHigh + 1] - baseOffsetHigh;
+		int baseOffsetHigh = blockOffsetTableAxisA[tSliceLow][aSliceHigh];
+		int nRecordHigh = blockOffsetTableAxisA[tSliceHigh][aSliceHigh] + blockCountTable[tSliceHigh][aSliceHigh] - baseOffsetHigh;
 
-		result.addIOCost((long)nRecordLow * 16);
-		result.addIOCost((long)nRecordHigh * 16);
+		
+		
+		result.addIOCost((long)nRecordLow * 8);
+		result.addIOCost((long)nRecordHigh * 8);
 		if (!doRealQuery) return;
-		result.tAxisIOCount++;
-		result.tAxisIOBytes += nRecordLow * 16;
-		result.tAxisIOCount++;
-		result.tAxisIOBytes += nRecordHigh * 16;
+		result.aAxisIOCount += 2;
+		result.aAxisIOBytes += (nRecordLow + nRecordHigh) * 8;
 		
-		ByteBuffer lowBuffer = ByteBuffer.allocate(nRecordLow * 16);
+		
+		ByteBuffer lowBuffer = ByteBuffer.allocate(nRecordLow * 8);
 		lowBuffer.order(ByteOrder.LITTLE_ENDIAN);
-		tAxisIndexChannel.read(lowBuffer, (long)baseOffsetLow * 16);
+		aAxisIndexChannel.read(lowBuffer, (long)baseOffsetLow * 8);
 		lowBuffer.position(0);
 		LongBuffer lowBufferL = lowBuffer.asLongBuffer();
 		
 		
-		ByteBuffer highBuffer = ByteBuffer.allocate(nRecordHigh * 16);
+		ByteBuffer highBuffer = ByteBuffer.allocate(nRecordHigh * 8);
 		highBuffer.order(ByteOrder.LITTLE_ENDIAN);
-		tAxisIndexChannel.read(highBuffer, (long)baseOffsetHigh * 16);
+		aAxisIndexChannel.read(highBuffer, (long)baseOffsetHigh * 8);
 		highBuffer.position(0);
 		LongBuffer highBufferL = highBuffer.asLongBuffer();
 		
 		int lowOffset = 0;
 		int highOffset = 0;
-		for (int aSliceId = aSliceLow; aSliceId <= aSliceHigh; aSliceId++) {
+		for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
 			
-			int lowCount = blockCountTable[tSliceLow][aSliceId];
-			int highCount = blockCountTable[tSliceHigh][aSliceId];
+			int lowCount = blockCountTable[tSliceId][aSliceLow];
+			int highCount = blockCountTable[tSliceId][aSliceHigh];
 			
-			long lowSum = blockPrefixSumBaseTable[tSliceLow][aSliceId];
+			long lastPrefixSum = blockPrefixSumBaseTable[tSliceId][aSliceLow];
+			long lowSum = lastPrefixSum;
 			int lowPtr = -1;
 			for (int i = lowOffset; i < lowOffset + lowCount; i++) {
-				long t = lowBufferL.get(i * 2);
-//				System.out.println(String.format("low t=%d prefixSum=%d", lowBufferL.get(i * 2), lowBufferL.get(i * 2 + 1)));
-				if (t < tMin) {
-					lowSum = lowBufferL.get(i * 2 + 1);
+				long prefixSum = lowBufferL.get(i);
+				long a = prefixSum - lastPrefixSum;
+				lastPrefixSum = prefixSum;
+//				System.out.println(String.format("low t=%d a=%d", lowBufferL.get(i * 2), a));
+				if (a < aMin) {
+					lowSum = prefixSum;
 					lowPtr = i - lowOffset;
 				} else {
 					break;
@@ -978,20 +968,23 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			}
 			lowPtr++;
 			
-			long highSum = blockPrefixSumBaseTable[tSliceHigh][aSliceId];
+			lastPrefixSum = blockPrefixSumBaseTable[tSliceId][aSliceHigh];
+			long highSum = lastPrefixSum;
 			int highPtr = -1;
 			for (int i = highOffset; i < highOffset + highCount; i++) {
-				long t = highBufferL.get(i * 2);
-//				System.out.println(String.format("high t=%d prefixSum=%d", highBufferL.get(i * 2), highBufferL.get(i * 2 + 1)));
-				if (t <= tMax) {
-					highSum = highBufferL.get(i * 2 + 1);
+				long prefixSum = highBufferL.get(i);
+				long a = prefixSum - lastPrefixSum;
+//				System.out.println(String.format("high t=%d a=%d", highBufferL.get(i * 2), a));
+				lastPrefixSum = prefixSum;
+				if (a <= aMax) {
+					highSum = highBufferL.get(i);
 					highPtr = i - highOffset;
 				}
 			}
 			
 			
-			int globalLowPtr = blockOffsetTableAxisA[tSliceLow][aSliceId] + lowPtr;
-			int globalHighPtr = blockOffsetTableAxisA[tSliceHigh][aSliceId] + highPtr;
+			int globalLowPtr = blockOffsetTableAxisT[tSliceId][aSliceLow] + lowPtr;
+			int globalHighPtr = blockOffsetTableAxisT[tSliceId][aSliceHigh] + highPtr;
 			
 			long sum = 0;
 			int cnt = 0;
@@ -1004,10 +997,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			result.cnt += cnt;
 		
 //			AverageResult referenceResult = new AverageResult();
-//			queryAverageSliceA(referenceResult, aSliceId, tSliceLow, tSliceHigh, tMin, tMax, aMin, aMax);
-//			System.out.println(String.format("aSliceId=%d ; tSliceLow=%d tSliceHigh=%d ; lowPtr=%d  highPtr=%d", aSliceId, tSliceLow, tSliceHigh, lowPtr, highPtr));
-//			System.out.println(String.format("cnt=%d sum=%d", cnt, sum));
-//			System.out.println(String.format("ref: cnt=%d sum=%d", referenceResult.cnt, referenceResult.sum));
+//			queryAverageAxisT(referenceResult, tSliceId, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+////			System.out.println(String.format("tSliceId=%d ; aSliceLow=%d aSliceHigh=%d ; lowPtr=%d  highPtr=%d", tSliceId, aSliceLow, aSliceHigh, lowPtr, highPtr));
+////			System.out.println(String.format("cnt=%d sum=%d", cnt, sum));
+////			System.out.println(String.format("ref: cnt=%d sum=%d", referenceResult.cnt, referenceResult.sum));
 //			assert cnt == referenceResult.cnt;
 //			assert sum == referenceResult.sum;
 
@@ -1022,18 +1015,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static void queryAlgorithm0(AverageResult result, boolean doRealQuery, int tSliceLow, int tSliceHigh, int aSliceLow, int aSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
-    	if (aSliceLow == aSliceHigh) {
+    	if (tSliceLow == tSliceHigh) {
     		// 在同一个a块内，只能暴力
-    		queryAverageSliceA(result, doRealQuery, aSliceLow, tSliceLow, tSliceHigh, tMin, tMax, aMin, aMax);
+    		queryAverageSliceT(result, doRealQuery, tSliceLow, tMin, tMax, aMin, aMax);
     		
     	} else {
     		
-    		queryAverageSliceA(result, doRealQuery, aSliceLow, tSliceLow, tSliceHigh, tMin, tMax, aMin, aMax);
-    		queryAverageSliceA(result, doRealQuery, aSliceHigh, tSliceLow, tSliceHigh, tMin, tMax, aMin, aMax);
-    		aSliceLow++;
-    		aSliceHigh--;
-    		if (aSliceLow <= aSliceHigh) {
-    			queryAverageAxisT(result, doRealQuery, tSliceLow, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+    		queryAverageSliceT(result, doRealQuery, tSliceLow, tMin, tMax, aMin, aMax);
+    		queryAverageSliceT(result, doRealQuery, tSliceHigh, tMin, tMax, aMin, aMax);
+    		tSliceLow++;
+    		tSliceHigh--;
+    		if (tSliceLow <= tSliceHigh) {
+    			queryAverageSliceA(result, doRealQuery, tSliceLow, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
     		}
     	}
     }
@@ -1110,7 +1103,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	assert optimalPlanId >= 0;
     	
-//    	optimalPlanId = 1;
+    	optimalPlanId = 0;
     	return optimalPlanId;
     }
     
@@ -1130,21 +1123,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
-    	
-    	
-    	
-    	
-    	
-    	
-    	if (true) return 0;
-    	
-    	
-    	
-    	
-    	
-    	
-    	
-    	
     	
     	int tSliceLow = findSliceT(tMin);
     	int tSliceHigh = findSliceT(tMax);
