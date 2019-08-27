@@ -1,6 +1,9 @@
 package io.openmessaging;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -67,6 +70,27 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		System.out.println("======== END OF FILE ========");
 	}
 	
+	
+	// 为给定文件保留*连续*磁盘空间
+	private static void reserveDiskSpace(String fileName, long nBytes) throws IOException
+	{
+		System.out.println("[" + new Date() + "]: " + String.format("reserveDiskSpace: file=%s size=%d", fileName, nBytes));
+		// 理论上，用fallocate()系统调用，可以不用写数据而达到预留磁盘空间的目的，但Java8不支持
+		// 所以这里使用向文件填0的方法
+		byte zeros[] = new byte[4096];
+		RandomAccessFile fp = new RandomAccessFile(fileName, "rw");
+		fp.setLength(0);
+		while (nBytes > 0) {
+			int nWrite = (int) Math.min(nBytes, zeros.length);
+			fp.write(zeros, 0, nWrite);
+			nBytes -= nWrite;
+		}
+		fp.close();
+		System.out.println("[" + new Date() + "]: reserveDiskSpace: done");
+	}
+	
+	
+	
 //	static {
 //    	printFile("/proc/cpuinfo");
 //    	printFile("/proc/meminfo");
@@ -102,8 +126,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	});
     }
     
-    private static final String storagePath = "./";
-//    private static final String storagePath = "/alidata1/race2019/data/";
+//    private static final String storagePath = "./";
+    private static final String storagePath = "/alidata1/race2019/data/";
     
     private static final String tAxisPointFile = storagePath + "tAxis.point.data";
     private static final String tAxisBodyFile = storagePath + "tAxis.body.data";
@@ -183,6 +207,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static int insCount = 0;
     
+    private static int globalTotalRecords = 0;
     private static long globalMaxA = Long.MIN_VALUE;
     private static long globalMinA = Long.MAX_VALUE;
     
@@ -415,69 +440,157 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
    
     
-    private static Message writeBuffer[] = new Message[1048576];
-    private static int writeBufferPtr = 0;
-    private static void putWriteBuffer(Message m)
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    private static long tValueBuffer[] = new long[1048576];
+    private static int tValueBufferPtr = 0;
+    private static void putTValue(long tValue)
     {
-    	writeBuffer[writeBufferPtr++] = m;
-    	if (writeBufferPtr == writeBuffer.length) {
-    		Message newBuffer[] = new Message[writeBuffer.length * 2];
-    		System.arraycopy(writeBuffer, 0, newBuffer, 0, writeBuffer.length);
-    		writeBuffer = newBuffer;
+    	tValueBuffer[tValueBufferPtr++] = tValue;
+    	if (tValueBufferPtr == tValueBuffer.length) {
+    		long newBuffer[] = new long[tValueBuffer.length * 2];
+    		System.arraycopy(tValueBuffer, 0, newBuffer, 0, tValueBuffer.length);
+    		tValueBuffer = newBuffer;
     	}
     }
 
-    private static void flushWriteBuffer(long exclusiveT) throws IOException
+    private static void calcSliceRecordCount(long exclusiveT) throws IOException
     {
-		ByteBuffer pointBuffer = ByteBuffer.allocate(writeBufferPtr * 16);
-		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
-		ByteBuffer bodyBuffer = ByteBuffer.allocate(writeBufferPtr * 34);
-		bodyBuffer.order(ByteOrder.LITTLE_ENDIAN);
-		
-		
-//		System.out.println(String.format("flush=%d size=%d", tSliceCount - 1, writeBuffer.size()));
-		int nWrite;
-		for (nWrite = 0; nWrite < writeBufferPtr; nWrite++) {
-			Message curMessage = writeBuffer[nWrite];
-			if (curMessage.getT() == exclusiveT) {
+		int nInclusive;
+		for (nInclusive = 0; nInclusive < tValueBufferPtr; nInclusive++) {
+			long curT = tValueBuffer[nInclusive];
+			if (curT == exclusiveT) {
 				break;
 			}
-			
-			pointBuffer.putLong(curMessage.getT());
-			pointBuffer.putLong(curMessage.getA());
-			bodyBuffer.put(curMessage.getBody());
 		}
 
-		tSliceRecordCount[tSliceCount - 1] = nWrite;
+		tSliceRecordCount[tSliceCount - 1] = nInclusive;
 		
-		System.arraycopy(writeBuffer, nWrite, writeBuffer, 0, writeBufferPtr - nWrite);
-		writeBufferPtr -= nWrite;
-		
-		tAxisPointData.write(pointBuffer.array(), 0, nWrite * 16);
-		tAxisBodyData.write(bodyBuffer.array(), 0, nWrite * 34);
+		System.arraycopy(tValueBuffer, nInclusive, tValueBuffer, 0, tValueBufferPtr - nInclusive);
+		tValueBufferPtr -= nInclusive;
     }
-    private static void insertMessage(Message message) throws IOException
+    private static BufferedOutputStream tAxisPointStream;
+    private static BufferedOutputStream tAxisBodyStream;
+    private static void beginInsertMessage() throws IOException
     {
-    	long curA = message.getA();
+    	reserveDiskSpace(tAxisPointFile, (long)globalTotalRecords * 16);
+    	tAxisPointStream = new BufferedOutputStream(new FileOutputStream(tAxisPointFile));
+    	tAxisBodyStream = new BufferedOutputStream(new FileOutputStream(tAxisBodyFile));
+    }
+    private static void insertMessage(ByteBuffer buffer, int offset) throws IOException
+    {
+    	long curA = buffer.getLong(offset + 8);
     	globalMinA = Math.min(globalMinA, curA);
     	globalMaxA = Math.max(globalMaxA, curA);
     	
-		long curT = message.getT();
+		long curT = buffer.getLong(offset);
 		
 		if (insCount % TSLICE_INTERVAL == 0) {
 			if (insCount > 0) {
-				flushWriteBuffer(curT);
+				calcSliceRecordCount(curT);
 			}
 			tSlicePivot[tSliceCount++] = curT;
 		}
 		
-		putWriteBuffer(message);
+		putTValue(curT);
+		tAxisPointStream.write(buffer.array(), offset, 16);
+		tAxisBodyStream.write(buffer.array(), offset + 16, 34);
 		
     	insCount++;
-//    	if (insCount % 1000000 == 0) {
-//			System.out.println("[" + new Date() + "]: " + String.format("ins %d: %s", insCount, dumpMessage(message)));
-//		}
+    	if (insCount % 1000000 == 0) {
+			System.out.println("[" + new Date() + "]: " + String.format("ins %d: t=%d a=%d", insCount, curT, curA));
+		}
     }
+    private static void finishInsertMessage() throws IOException
+    {
+    	calcSliceRecordCount(Long.MAX_VALUE);
+    	tSlicePivot[tSliceCount] = Long.MAX_VALUE;
+    	assert tValueBufferPtr == 0;
+    	tValueBuffer = null;
+    	tAxisPointStream.close();
+    	tAxisPointStream = null;
+    	tAxisBodyStream.close();
+    	tAxisBodyStream = null;
+    }
+    
+
+
+
+    private static final int MAX_MSGBUF = 1000;
+    private static void externalMergeSort() throws IOException
+    {
+    	System.out.println("[" + new Date().toString() + "]: merge-sort begin!");
+    	
+
+		int nThread = putThreadCount.get();
+		
+		ByteBuffer queueHead = ByteBuffer.allocate(64 * nThread); // 还是按64字节对齐一下吧
+		queueHead.order(ByteOrder.LITTLE_ENDIAN);
+		int readCount[] = new int[nThread]; 
+		int recordCount[] = new int[nThread];
+		
+		for (int i = 0; i < nThread; i++) {
+			recordCount[i] = putTLD[i].outputCount;
+			readCount[i] = 0;
+			putTLD[i].bufferedInputStream = new BufferedInputStream(new FileInputStream(putTLD[i].dataFileName));
+			putTLD[i].bufferedInputStream.read(queueHead.array(), i * 64, 50);
+		}
+		
+		beginInsertMessage();
+		
+		while (true) {
+			
+			long minValue = Long.MAX_VALUE;
+			int minPos = -1;
+			for (int i = 0; i < nThread; i++) {
+				if (readCount[i] < recordCount[i]) {
+					long curValue = queueHead.getLong(i * 64);
+					if (curValue <= minValue) {
+						minValue = curValue;
+						minPos = i;
+					}
+				}
+			}
+			
+			if (minPos == -1) {
+				break;
+			}
+			
+			insertMessage(queueHead, minPos * 64);
+			readCount[minPos]++;
+			putTLD[minPos].bufferedInputStream.read(queueHead.array(), minPos * 64, 50);
+		}
+		
+		finishInsertMessage();
+		
+		for (int i = 0; i < nThread; i++) {
+			putTLD[i].bufferedInputStream.close();
+			putTLD[i].bufferedInputStream = null;
+		}
+		System.out.println("[" + new Date().toString() + "]: merge-sort completed!");
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
     private static void buildIndex() throws IOException
     {
@@ -514,102 +627,47 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	indexByteBuffer = null;
     	indexMsgBuffer = null;
     }
-
-    private static volatile boolean putFinished = false;
-    private static void sortThreadProc()
-    {
-    	System.out.println("[" + new Date() + "]: sort thread started");
-		
-    	int nThread = putThreadCount.get();
-    	
-    	Message buffer[][] = new Message[nThread][];
-    	int bufptr[] = new int[nThread];
-    	
-    	boolean threadExited[] = new boolean[nThread];
-
-    	try {
-    		
-    		// 合并排序
-        	for (int i = 0; i < nThread; i++) {
-        		buffer[i] = insertQueue[i].take();
-        		bufptr[i] = 0;
-        	}
-        	
-	    	while (true) {
-	    		
-	    		long minT = Long.MAX_VALUE;
-	    		int qid = -1;
-	    		
-	    		for (int i = 0; i < nThread; i++) {
-	    			Message m = buffer[i][bufptr[i]];
-	    			if (m != null) {
-		    			long curT = m.getT();
-		    			if (curT <= minT) {
-		    				minT = curT;
-		    				qid = i;
-		    			}
-	    			}
-	    		}
-	    		
-	    		if (qid == -1) break;
-	    		
-	    		insertMessage(buffer[qid][bufptr[qid]]);
-	    		
-	    		if (++bufptr[qid] >= buffer[qid].length) {
-	    			if (threadExited[qid]) {
-	    				buffer[qid] = new Message[1];
-	    			} else {
-	    				if (putFinished && insertQueue[qid].isEmpty()) {
-	    					buffer[qid] = null;
-	    				} else {
-	    					buffer[qid] = insertQueue[qid].poll(3, TimeUnit.SECONDS);
-	    				}
-		    			if (buffer[qid] == null) {
-		    				System.out.println(String.format("put thread %d timeout, assume exited", qid));
-//		    				buffer[qid] = putTLD[qid].buffer;
-		    				threadExited[qid] = true;
-		    			}
-	    			}
-	    			bufptr[qid] = 0;
-	    		}
-	    	}
-	    	
-	    	
-	    	// 刷掉写缓存
-	    	flushWriteBuffer(Long.MAX_VALUE);
-	    	tSlicePivot[tSliceCount] = Long.MAX_VALUE;
-	    	assert writeBufferPtr == 0;
-	    	writeBuffer = null;
-	    	
-	    	// 建立索引
-	    	buildIndex();
-	    	
-	    } catch (InterruptedException | IOException e) {
-			e.printStackTrace();
-			System.exit(-1);
-		}
-    	
-    	System.out.println("[" + new Date() + "]: sort thread finished");
-    }
-
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
     private static final int MAXTHREAD = 100;
-    private static final int MAXQUEUE = 20;
-    
-    private static final ArrayBlockingQueue<Message[]> insertQueue[] = new ArrayBlockingQueue[MAXTHREAD];
-    
 
-    
-    
-    private static final int MAXBUFFER = 2000;
     private static class PutThreadLocalData {
-//    	DeflaterOutputStream deflaterOutputStream;
     	BufferedOutputStream bufferedOutputStream;
-    	ByteBuffer msgdata;
+    	BufferedInputStream bufferedInputStream;
+    	
+    	ByteBuffer msgData;
+    	int outputCount = 0;
     	
     	int threadId;
-    	String outputFileName;
-    	FileOutputStream outputStream;
+    	String dataFileName;
+    	
     }
     private static final PutThreadLocalData putTLD[] = new PutThreadLocalData[MAXTHREAD];
     private static final AtomicInteger putThreadCount = new AtomicInteger();
@@ -618,28 +676,40 @@ public class DefaultMessageStoreImpl extends MessageStore {
         	
         	PutThreadLocalData pd = new PutThreadLocalData();
         	pd.threadId = putThreadCount.getAndIncrement();
-        	pd.outputFileName = String.format("thread%04d.data", pd.threadId);
+        	putTLD[pd.threadId] = pd;
+        	pd.dataFileName = String.format("thread%04d.data", pd.threadId);
         	
         	try {
-        		pd.outputStream = new FileOutputStream(pd.outputFileName);
-        		pd.bufferedOutputStream = new BufferedOutputStream(pd.outputStream);
-//        		Deflater z = new Deflater();
-//        		z.setLevel(1);
-//        		z.setStrategy(Deflater.FILTERED);
-//				pd.deflaterOutputStream = new DeflaterOutputStream(pd.outputStream, z);
+        		pd.bufferedOutputStream = new BufferedOutputStream(new FileOutputStream(pd.dataFileName));
 			} catch (IOException e) {
 				e.printStackTrace();
 				System.exit(-1);
 			}
         	
-        	pd.msgdata = ByteBuffer.allocate(50);
-        	pd.msgdata.order(ByteOrder.LITTLE_ENDIAN);
+        	pd.msgData = ByteBuffer.allocate(50);
+        	pd.msgData.order(ByteOrder.LITTLE_ENDIAN);
         	return pd;
         }
     };
-
-    private static Thread sortThread;
     
+    
+    private static void flushPutBuffer() throws IOException
+    {
+    	System.out.println("[" + new Date() + "]: flushing remaining buffers ...");
+    	globalTotalRecords = 0;
+		int nThread = putThreadCount.get();
+		for (int i = 0; i < nThread; i++) {
+			PutThreadLocalData pd = putTLD[i];
+			
+			pd.bufferedOutputStream.close();
+			pd.bufferedOutputStream = null;
+			
+			System.out.println(String.format("thread %d: %d", i, pd.outputCount));
+			globalTotalRecords += pd.outputCount;
+		}
+		System.out.println(String.format("total: %d", globalTotalRecords));
+    }
+
     @Override
     public void put(Message message) {
 
@@ -660,18 +730,47 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	try {
     		PutThreadLocalData pd = putBuffer.get();
-    		pd.msgdata.position(0);
-    		pd.msgdata.putLong(message.getT());
-    		pd.msgdata.putLong(message.getA());
-    		pd.msgdata.put(message.getBody());
+    		pd.msgData.position(0);
+    		pd.msgData.putLong(message.getT());
+    		pd.msgData.putLong(message.getA());
+    		pd.msgData.put(message.getBody());
 
-    		pd.bufferedOutputStream.write(pd.msgdata.array());
+    		pd.outputCount++;
+    		pd.bufferedOutputStream.write(pd.msgData.array());
     		
 		} catch (IOException e) {
 			e.printStackTrace();
 			System.exit(-1);
 		}
     }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
     @Override
     public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {
@@ -681,10 +780,23 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			if (state == 1) {
     				System.out.println("[" + new Date() + "]: getMessage() started");
 
+    				
+    				try {
+    					
+						flushPutBuffer();
+						externalMergeSort();
+						buildIndex();
+						
+					} catch (Exception e) {
+						e.printStackTrace();
+						state = -1;
+						System.exit(-1);
+					}
+    				
+    				
     				System.out.println(String.format("insCount=%d", insCount));
     				System.out.println(String.format("globalMinA=%d", globalMinA));
     				System.out.println(String.format("globalMaxA=%d", globalMaxA));
-    				
     				
     				System.gc();
 
@@ -694,11 +806,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	
     	
-    	if (true) return new ArrayList<Message>();
-    	
-    	
-    	
-
     	ArrayList<Message> result = new ArrayList<Message>();
     	
     	int tSliceLow = findSliceT(tMin);
@@ -751,6 +858,34 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	return result;
     }
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
     
     
