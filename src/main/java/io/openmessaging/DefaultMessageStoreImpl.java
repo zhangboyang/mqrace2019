@@ -309,7 +309,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	System.out.println("[" + new Date() + "]: build index for a-axis");
     	
     	tAxisPointData.seek(0);
-    	aAxisIndexData.setLength(tAxisPointData.length()); // FIXME: 是否会造成文件在磁盘上存储不连续？
+    	reserveDiskSpace(aAxisIndexFile, (long)insCount * 8); // FIXME: 是否会造成文件在磁盘上存储不连续？
     	
     	for (int tSliceId = 0; tSliceId <= tSliceCount; tSliceId += BATCHSIZE) {
     		buildIndexForRangeAxisA(tSliceId, Math.min(tSliceId + BATCHSIZE, tSliceCount) - 1);
