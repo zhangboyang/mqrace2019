@@ -3,7 +3,6 @@ package io.openmessaging;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -14,15 +13,10 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.DoubleAdder;
-import java.util.zip.Deflater;
-import java.util.zip.DeflaterOutputStream;
-import java.util.zip.GZIPOutputStream;
 
 /**
  * 这是一个简单的基于内存的实现，以方便选手理解题意；
@@ -126,8 +120,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	});
     }
     
-//    private static final String storagePath = "./";
-    private static final String storagePath = "/alidata1/race2019/data/";
+    private static final String storagePath = "./";
+//    private static final String storagePath = "/alidata1/race2019/data/";
     
     private static final String tAxisPointFile = storagePath + "tAxis.point.data";
     private static final String tAxisBodyFile = storagePath + "tAxis.body.data";
@@ -450,7 +444,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			long a = msg.getA();
 			
 			while (aSliceId < N_ASLICE && a >= aSlicePivot[aSliceId + 1]) aSliceId++;
-			assert aSliceId == findSliceA(a);
+//			assert aSliceId == findSliceA(a);
 			
 			blockCountTable[tSliceId][aSliceId]++;
 			
@@ -513,49 +507,52 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
 
 
-    private static final int MAX_MSGBUF = 1000;
     private static void externalMergeSort() throws IOException
     {
     	System.out.println("[" + new Date().toString() + "]: merge-sort begin!");
-    	
 
 		int nThread = putThreadCount.get();
 		
-		ByteBuffer queueHead = ByteBuffer.allocate(64 * nThread); // 还是按64字节对齐一下吧
-		queueHead.order(ByteOrder.LITTLE_ENDIAN);
+		ByteBuffer queueHeadData = ByteBuffer.allocate(64 * nThread); // 还是按64字节对齐一下吧
+		queueHeadData.order(ByteOrder.LITTLE_ENDIAN);
 		int readCount[] = new int[nThread]; 
 		int recordCount[] = new int[nThread];
+		long queueHead[] = new long[nThread];
+		
 		
 		for (int i = 0; i < nThread; i++) {
 			recordCount[i] = putTLD[i].outputCount;
 			readCount[i] = 0;
 			putTLD[i].bufferedInputStream = new BufferedInputStream(new FileInputStream(putTLD[i].dataFileName));
-			putTLD[i].bufferedInputStream.read(queueHead.array(), i * 64, 50);
+			putTLD[i].bufferedInputStream.read(queueHeadData.array(), i * 64, 50);
+			queueHead[i] = queueHeadData.getLong(i * 64);
 		}
 		
 		beginInsertMessage();
 		
 		while (true) {
 			
-			long minValue = Long.MAX_VALUE;
-			int minPos = -1;
-			for (int i = 0; i < nThread; i++) {
-				if (readCount[i] < recordCount[i]) {
-					long curValue = queueHead.getLong(i * 64);
-					if (curValue <= minValue) {
-						minValue = curValue;
-						minPos = i;
-					}
+			long minValue = queueHead[0];
+			int minPos = 0;
+			for (int i = 1; i < nThread; i++) {
+				long curValue = queueHead[i];
+				if (curValue < minValue) {
+					minValue = curValue;
+					minPos = i;
 				}
 			}
 			
-			if (minPos == -1) {
+			if (minValue == Long.MAX_VALUE) {
 				break;
 			}
 			
-			insertMessage(queueHead, minPos * 64);
-			readCount[minPos]++;
-			putTLD[minPos].bufferedInputStream.read(queueHead.array(), minPos * 64, 50);
+			insertMessage(queueHeadData, minPos * 64);
+			if (++readCount[minPos] >= recordCount[minPos]) {
+				queueHead[minPos] = Long.MAX_VALUE;
+			} else {
+				putTLD[minPos].bufferedInputStream.read(queueHeadData.array(), minPos * 64, 50);
+				queueHead[minPos] = queueHeadData.getLong(minPos * 64);
+			}
 		}
 		
 		finishInsertMessage();
@@ -1103,7 +1100,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	assert optimalPlanId >= 0;
     	
-    	optimalPlanId = 0;
+//    	optimalPlanId = 0;
     	return optimalPlanId;
     }
     
