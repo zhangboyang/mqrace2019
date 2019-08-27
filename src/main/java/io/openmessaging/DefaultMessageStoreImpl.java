@@ -67,12 +67,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		System.out.println("======== END OF FILE ========");
 	}
 	
-	static {
-    	printFile("/proc/cpuinfo");
-    	printFile("/proc/meminfo");
-    	printFile("/proc/mounts");
-    	System.out.println("Working Directory = " + System.getProperty("user.dir"));
-	}
+//	static {
+//    	printFile("/proc/cpuinfo");
+//    	printFile("/proc/meminfo");
+//    	printFile("/proc/mounts");
+//    	System.out.println("Working Directory = " + System.getProperty("user.dir"));
+//	}
 	
 	private static String dumpMessage(Message message)
 	{
@@ -94,13 +94,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static volatile int state = 0;
     private static final Object stateLock = new Object();
     
-//    static {
-//    	Runtime.getRuntime().addShutdownHook(new Thread() {
-//    		public void run() {
-//    			atShutdown();
-//    		}
-//    	});
-//    }
+    static {
+    	Runtime.getRuntime().addShutdownHook(new Thread() {
+    		public void run() {
+    			atShutdown();
+    		}
+    	});
+    }
     
 //    private static final String storagePath = "./";
     private static final String storagePath = "/alidata1/race2019/data/";
@@ -671,22 +671,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     @Override
     public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {
-    	
-    	if (true) return new ArrayList<Message>();
 
     	if (state == 1) {
     		synchronized (stateLock) {
     			if (state == 1) {
     				System.out.println("[" + new Date() + "]: getMessage() started");
-    				
-    				try {
-    					putFinished = true;
-						sortThread.join();
-					} catch (InterruptedException e) {
-						e.printStackTrace();
-						System.exit(-1);
-					}
-    				
+
     				System.out.println(String.format("insCount=%d", insCount));
     				System.out.println(String.format("globalMinA=%d", globalMinA));
     				System.out.println(String.format("globalMaxA=%d", globalMaxA));
@@ -698,6 +688,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			}
     		}
     	}
+    	
+    	
+    	if (true) return new ArrayList<Message>();
+    	
+    	
     	
 
     	ArrayList<Message> result = new ArrayList<Message>();
