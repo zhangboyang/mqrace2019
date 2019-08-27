@@ -891,14 +891,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     ////////////////////////////////////////////////////////////////////////////////////////
     // 算法0：查询矩形的四个边
     
-    private static void queryAverageSliceT(AverageResult result, boolean doRealQuery, int tSliceId, long tMin, long tMax, long aMin, long aMax) throws IOException
+    private static void queryAverageSliceT(AverageResult result, boolean doRealQuery, int tSliceId, int aSliceLow, int aSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
-		int baseOffset = tSliceRecordOffset[tSliceId];
-		int nRecord = tSliceRecordCount[tSliceId];
+		int baseOffset = blockOffsetTableAxisT[tSliceId][aSliceLow];
+		int nRecord = blockOffsetTableAxisT[tSliceId][aSliceHigh + 1] - baseOffset;
 		
 		result.addIOCost((long)nRecord * 16);
 		if (!doRealQuery) return;
-		result.tAxisIOCount++; // FIXME: 其实这里读取的不是Index文件，应分开统计
+		result.tAxisIOCount++;
 		result.tAxisIOBytes += nRecord * 16;
 		
 		ByteBuffer pointBuffer = ByteBuffer.allocateDirect(nRecord * 16);
@@ -928,11 +928,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    	System.out.println(String.format("(%d %d %d %d)", tMin, tMax, aMin, aMax));
 
     	int baseOffsetLow = blockOffsetTableAxisA[tSliceLow][aSliceLow];
-		int nRecordLow = blockOffsetTableAxisA[tSliceHigh][aSliceLow] + blockCountTable[tSliceHigh][aSliceLow] - baseOffsetLow;
+		int nRecordLow = blockOffsetTableAxisA[tSliceHigh + 1][aSliceLow] - baseOffsetLow;
 
 		
 		int baseOffsetHigh = blockOffsetTableAxisA[tSliceLow][aSliceHigh];
-		int nRecordHigh = blockOffsetTableAxisA[tSliceHigh][aSliceHigh] + blockCountTable[tSliceHigh][aSliceHigh] - baseOffsetHigh;
+		int nRecordHigh = blockOffsetTableAxisA[tSliceHigh + 1][aSliceHigh] - baseOffsetHigh;
 
 		
 		
@@ -1029,12 +1029,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
     {
     	if (tSliceLow == tSliceHigh) {
     		// 在同一个a块内，只能暴力
-    		queryAverageSliceT(result, doRealQuery, tSliceLow, tMin, tMax, aMin, aMax);
+    		queryAverageSliceT(result, doRealQuery, tSliceLow, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
     		
     	} else {
     		
-    		queryAverageSliceT(result, doRealQuery, tSliceLow, tMin, tMax, aMin, aMax);
-    		queryAverageSliceT(result, doRealQuery, tSliceHigh, tMin, tMax, aMin, aMax);
+    		queryAverageSliceT(result, doRealQuery, tSliceLow, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+    		queryAverageSliceT(result, doRealQuery, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
     		tSliceLow++;
     		tSliceHigh--;
     		if (tSliceLow <= tSliceHigh) {
@@ -1057,7 +1057,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		result.addIOCost((long)nRecord * 16);
 		if (!doRealQuery) return;
-		result.tAxisIOCount++; // FIXME: 其实这里读取的不是Index文件，应分开统计
+		result.tAxisIOCount++; // FIXME: 分开统计？
 		result.tAxisIOBytes += nRecord * 16;
 		
 		ByteBuffer pointBuffer = ByteBuffer.allocateDirect(nRecord * 16);
