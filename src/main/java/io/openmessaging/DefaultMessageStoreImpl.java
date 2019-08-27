@@ -170,8 +170,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
 
     private static final int MAXMSG = 2100000000;
-    private static final int N_TSLICE = 2000000;
-    private static final int N_ASLICE = 60;
+    private static final int N_TSLICE = 3000000;
+    private static final int N_ASLICE = 40;
     
     private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
     
@@ -246,7 +246,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     }
     
-    private static final int BATCHSIZE = 3000;
+    private static final int BATCHSIZE = 5000;
 
     private static void buildIndexForRangeAxisA(int tSliceFrom, int tSliceTo) throws IOException
     {
@@ -412,13 +412,32 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	writeBufferPtr -= n;
     }
+    
+    
+    private static ByteBuffer pointBuffer = null;
+    private static void reservePointBuffer(int nBytes)
+    {
+    	if (pointBuffer == null || pointBuffer.capacity() < nBytes) {
+    		pointBuffer = ByteBuffer.allocate(nextSize(nBytes));
+    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+    	}
+    }
+    
+    private static ByteBuffer bodyBuffer = null;
+    private static void reserveBodyBuffer(int nBytes)
+    {
+    	if (bodyBuffer == null || bodyBuffer.capacity() < nBytes) {
+    		bodyBuffer = ByteBuffer.allocate(nextSize(nBytes));
+    		bodyBuffer.order(ByteOrder.LITTLE_ENDIAN);
+    	}
+    }
 
     private static void flushWriteBuffer(long exclusiveT) throws IOException
     {
-		ByteBuffer pointBuffer = ByteBuffer.allocate(writeBufferPtr * 16);
-		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
-		ByteBuffer bodyBuffer = ByteBuffer.allocate(writeBufferPtr * 34);
-		bodyBuffer.order(ByteOrder.LITTLE_ENDIAN);
+		reservePointBuffer(writeBufferPtr * 16);
+		reserveBodyBuffer(writeBufferPtr * 34);
+		pointBuffer.position(0);
+		bodyBuffer.position(0);
 		
 		
 //		System.out.println(String.format("flush=%d size=%d", tSliceCount - 1, writeBuffer.size()));
@@ -842,22 +861,55 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
+    private static final AverageResult queryTLD[] = new AverageResult[MAXTHREAD];
+    private static final AtomicInteger queryThreadCount = new AtomicInteger();
+    private static final ThreadLocal<AverageResult> averageResult = new ThreadLocal<AverageResult>() {
+        @Override protected AverageResult initialValue() {
+        	return queryTLD[queryThreadCount.getAndIncrement()];
+        }
+    };
     
-    
+    static {
+    	for (int i = 0; i < MAXTHREAD; i++) {
+    		queryTLD[i] = new AverageResult();
+    	}
+    }
     
     
     private static final int MAXPLAN = 2;
     private static final double IOSIZE_FACTOR = 20 * 1024; // SSD速度为 200MB/s 10000IOPS  这样算每个IO大约20KB
     
     private static class AverageResult {
-    	long sum = 0;
-    	int cnt = 0;
+    	long sum;
+    	int cnt;
     	
-    	long tAxisIOCount = 0;
-    	long tAxisIOBytes = 0;
+    	//////////////
+        ByteBuffer bufferA = null;
+        ByteBuffer reserveBufferA(int nBytes)
+        {
+        	if (bufferA == null || bufferA.capacity() < nBytes) {
+        		bufferA = ByteBuffer.allocate(nextSize(nBytes));
+        		bufferA.order(ByteOrder.LITTLE_ENDIAN);
+        	}
+        	return bufferA;
+        }
+        
+        ByteBuffer bufferB = null;
+        ByteBuffer reserveBufferB(int nBytes)
+        {
+        	if (bufferB == null || bufferB.capacity() < nBytes) {
+        		bufferB = ByteBuffer.allocate(nextSize(nBytes));
+        		bufferB.order(ByteOrder.LITTLE_ENDIAN);
+        	}
+        	return bufferB;
+        }
+    	//////////////
     	
-    	long aAxisIOCount = 0;
-    	long aAxisIOBytes = 0;
+    	long tAxisIOCount;
+    	long tAxisIOBytes;
+    	
+    	long aAxisIOCount;
+    	long aAxisIOBytes;
     	
     	//////////////
     	
@@ -869,6 +921,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		// 若IO字节数太小，则按IO次数为1计算代价
     		// 若IO字节数太大，则把IO字节数换算成IO次数，计算代价
     		ioCost[curPlan] += Math.max(1.0, nBytes / IOSIZE_FACTOR);
+    	}
+    	
+    	//////////////
+    	
+    	void reset()
+    	{
+    		sum = 0;
+    		cnt = 0;
+    		
+    		tAxisIOCount = 0;
+    		tAxisIOBytes = 0;
+    		aAxisIOCount = 0;
+    		aAxisIOBytes = 0;
     	}
     }
     
@@ -886,7 +951,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOCount++; // FIXME: 其实这里读取的不是Index文件，应分开统计
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
+		ByteBuffer pointBuffer = result.reserveBufferA(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
@@ -928,14 +993,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOBytes += (nRecordLow + nRecordHigh) * 8;
 		
 		
-		ByteBuffer lowBuffer = ByteBuffer.allocate(nRecordLow * 8);
+		ByteBuffer lowBuffer = result.reserveBufferA(nRecordLow * 8);
 		lowBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		aAxisIndexChannel.read(lowBuffer, (long)baseOffsetLow * 8);
 		lowBuffer.position(0);
 		LongBuffer lowBufferL = lowBuffer.asLongBuffer();
 		
 		
-		ByteBuffer highBuffer = ByteBuffer.allocate(nRecordHigh * 8);
+		ByteBuffer highBuffer = result.reserveBufferB(nRecordHigh * 8);
 		highBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		aAxisIndexChannel.read(highBuffer, (long)baseOffsetHigh * 8);
 		highBuffer.position(0);
@@ -1045,7 +1110,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOCount++; // FIXME: 其实这里读取的不是Index文件，应分开统计
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
+		ByteBuffer pointBuffer = result.reserveBufferA(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
@@ -1098,7 +1163,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			optimalPlanId = planId;
     		}
     	}
-    	assert optimalPlanId >= 0;
     	
 //    	optimalPlanId = 0;
     	return optimalPlanId;
@@ -1126,7 +1190,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int aSliceLow = findSliceA(aMin);
     	int aSliceHigh = findSliceA(aMax);
 
-    	AverageResult result = new AverageResult();
+    	AverageResult result = averageResult.get();
+    	result.reset();
     	
 //    	System.out.println(String.format("block: t[%d %d] a[%d %d]", tSliceLow, tSliceHigh, aSliceLow, aSliceHigh));  
     	try {
