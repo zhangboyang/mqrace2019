@@ -621,7 +621,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
         	
         	try {
         		pd.outputStream = new FileOutputStream(pd.outputFileName);
-				pd.deflaterOutputStream = new DeflaterOutputStream(pd.outputStream, new Deflater(Deflater.BEST_SPEED));
+        		Deflater z = new Deflater();
+        		z.setLevel(1);
+        		z.setStrategy(Deflater.FILTERED);
+				pd.deflaterOutputStream = new DeflaterOutputStream(pd.outputStream, z);
 			} catch (IOException e) {
 				e.printStackTrace();
 				System.exit(-1);
