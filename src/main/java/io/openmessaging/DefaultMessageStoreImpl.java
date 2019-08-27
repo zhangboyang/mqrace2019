@@ -901,7 +901,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOCount++; // FIXME: 其实这里读取的不是Index文件，应分开统计
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
+		ByteBuffer pointBuffer = ByteBuffer.allocateDirect(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
@@ -943,14 +943,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOBytes += (nRecordLow + nRecordHigh) * 8;
 		
 		
-		ByteBuffer lowBuffer = ByteBuffer.allocate(nRecordLow * 8);
+		ByteBuffer lowBuffer = ByteBuffer.allocateDirect(nRecordLow * 8);
 		lowBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		aAxisIndexChannel.read(lowBuffer, (long)baseOffsetLow * 8);
 		lowBuffer.position(0);
 		LongBuffer lowBufferL = lowBuffer.asLongBuffer();
 		
 		
-		ByteBuffer highBuffer = ByteBuffer.allocate(nRecordHigh * 8);
+		ByteBuffer highBuffer = ByteBuffer.allocateDirect(nRecordHigh * 8);
 		highBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		aAxisIndexChannel.read(highBuffer, (long)baseOffsetHigh * 8);
 		highBuffer.position(0);
@@ -1060,7 +1060,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOCount++; // FIXME: 其实这里读取的不是Index文件，应分开统计
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
+		ByteBuffer pointBuffer = ByteBuffer.allocateDirect(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
