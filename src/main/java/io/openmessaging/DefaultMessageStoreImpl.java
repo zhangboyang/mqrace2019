@@ -858,24 +858,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
-    
-    
-    
-    private static final AverageResult queryTLD[] = new AverageResult[MAXTHREAD];
-    private static final AtomicInteger queryThreadCount = new AtomicInteger();
-    private static final ThreadLocal<AverageResult> averageResult = new ThreadLocal<AverageResult>() {
-        @Override protected AverageResult initialValue() {
-        	return queryTLD[queryThreadCount.getAndIncrement()];
-        }
-    };
-    
-    static {
-    	for (int i = 0; i < MAXTHREAD; i++) {
-    		queryTLD[i] = new AverageResult();
-    	}
-    }
-    
-    
     private static final int MAXPLAN = 2;
     private static final double IOSIZE_FACTOR = 20 * 1024; // SSD速度为 200MB/s 10000IOPS  这样算每个IO大约20KB
     
@@ -883,26 +865,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	long sum;
     	int cnt;
     	
-    	//////////////
-        ByteBuffer bufferA = null;
-        ByteBuffer reserveBufferA(int nBytes)
-        {
-        	if (bufferA == null || bufferA.capacity() < nBytes) {
-        		bufferA = ByteBuffer.allocate(nextSize(nBytes));
-        		bufferA.order(ByteOrder.LITTLE_ENDIAN);
-        	}
-        	return bufferA;
-        }
-        
-        ByteBuffer bufferB = null;
-        ByteBuffer reserveBufferB(int nBytes)
-        {
-        	if (bufferB == null || bufferB.capacity() < nBytes) {
-        		bufferB = ByteBuffer.allocate(nextSize(nBytes));
-        		bufferB.order(ByteOrder.LITTLE_ENDIAN);
-        	}
-        	return bufferB;
-        }
     	//////////////
     	
     	long tAxisIOCount;
@@ -922,19 +884,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		// 若IO字节数太大，则把IO字节数换算成IO次数，计算代价
     		ioCost[curPlan] += Math.max(1.0, nBytes / IOSIZE_FACTOR);
     	}
-    	
-    	//////////////
-    	
-    	void reset()
-    	{
-    		sum = 0;
-    		cnt = 0;
-    		
-    		tAxisIOCount = 0;
-    		tAxisIOBytes = 0;
-    		aAxisIOCount = 0;
-    		aAxisIOBytes = 0;
-    	}
+
     }
     
     
@@ -951,7 +901,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOCount++; // FIXME: 其实这里读取的不是Index文件，应分开统计
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = result.reserveBufferA(nRecord * 16);
+		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
@@ -993,14 +943,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOBytes += (nRecordLow + nRecordHigh) * 8;
 		
 		
-		ByteBuffer lowBuffer = result.reserveBufferA(nRecordLow * 8);
+		ByteBuffer lowBuffer = ByteBuffer.allocate(nRecordLow * 8);
 		lowBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		aAxisIndexChannel.read(lowBuffer, (long)baseOffsetLow * 8);
 		lowBuffer.position(0);
 		LongBuffer lowBufferL = lowBuffer.asLongBuffer();
 		
 		
-		ByteBuffer highBuffer = result.reserveBufferB(nRecordHigh * 8);
+		ByteBuffer highBuffer = ByteBuffer.allocate(nRecordHigh * 8);
 		highBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		aAxisIndexChannel.read(highBuffer, (long)baseOffsetHigh * 8);
 		highBuffer.position(0);
@@ -1110,7 +1060,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOCount++; // FIXME: 其实这里读取的不是Index文件，应分开统计
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = result.reserveBufferA(nRecord * 16);
+		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
@@ -1190,8 +1140,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int aSliceLow = findSliceA(aMin);
     	int aSliceHigh = findSliceA(aMax);
 
-    	AverageResult result = averageResult.get();
-    	result.reset();
+    	AverageResult result = new AverageResult();
     	
 //    	System.out.println(String.format("block: t[%d %d] a[%d %d]", tSliceLow, tSliceHigh, aSliceLow, aSliceHigh));  
     	try {
