@@ -397,6 +397,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     private static Message writeBuffer[] = null;
+    private static Message writeBuffer2[] = null;
     private static int writeBufferPtr = 0;
     
     private static void reserveWriteBuffer(int n)
@@ -414,6 +415,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			newBuffer[i] = new Message(0, 0, new byte[34]);
     		}
     		writeBuffer = newBuffer;
+    		writeBuffer2 = new Message[newBuffer.length];
     	}
     }
     private static void shiftWriteBuffer(int n)
@@ -421,11 +423,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	if (writeBufferPtr != n) {
     		int m = writeBufferPtr - n;
     		
-    		for (int i = 0, j = writeBufferPtr; i < m; i++, j++) {
-    			Message t = writeBuffer[i];
-    			writeBuffer[i] = writeBuffer[j];
-    			writeBuffer[j] = t;
-    		}
+    		System.arraycopy(writeBuffer, n, writeBuffer2, 0, m);
+    		System.arraycopy(writeBuffer, 0, writeBuffer2, m, n);
+    		
+    		Message t[] = writeBuffer;
+    		writeBuffer = writeBuffer2;
+    		writeBuffer2 = t;
     	}
     	writeBufferPtr -= n;
     }
@@ -513,6 +516,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	tSlicePivot[tSliceCount] = Long.MAX_VALUE;
     	assert writeBufferPtr == 0;
     	writeBuffer = null;
+    	writeBuffer2 = null;
     	
     	tAxisPointStream.close();
     	tAxisPointStream = null;
