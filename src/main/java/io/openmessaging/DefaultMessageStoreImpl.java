@@ -126,8 +126,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	});
     }
     
-//    private static final String storagePath = "./";
-    private static final String storagePath = "/alidata1/race2019/data/";
+    private static final String storagePath = "./";
+//    private static final String storagePath = "/alidata1/race2019/data/";
     
     private static final String tAxisPointFile = storagePath + "tAxis.point.data";
     private static final String tAxisBodyFile = storagePath + "tAxis.body.data";
@@ -265,86 +265,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     }
     
-    
-    private static void buildIndexAxisT() throws IOException
-    {
-    	System.out.println("[" + new Date() + "]: build index for t-axis");
-    	
-    	tAxisPointData.seek(0);
-    	
-    	long prefixSum[] = new long[N_ASLICE];
-    	
-    	for (int tSliceId = 0; tSliceId < tSliceCount; tSliceId++) {
-    		int nRecord = tSliceRecordCount[tSliceId];
-    		
-    		reserveIndexByteBuffer(nRecord * 16);
-    		reserveMsgBuffer(nRecord);
-    		
-//    		System.out.println(String.format("%d %d %d", nRecord, tAxisPointData.getFilePointer(), (long)tSliceRecordOffset[tSliceId] * 16));
-    		assert tAxisPointData.getFilePointer() == (long)tSliceRecordOffset[tSliceId] * 16;
-    		tAxisPointData.readFully(indexByteBuffer.array(), 0, nRecord * 16);
-    		
-    		System.arraycopy(prefixSum, 0, blockPrefixSumBaseTable[tSliceId], 0, N_ASLICE);
-    		
-    		indexByteBuffer.position(0);
-    		LongBuffer indexLongBuffer = indexByteBuffer.asLongBuffer();
-    		
-    		for (int i = 0; i < nRecord; i++) {
-    			long t = indexLongBuffer.get(i * 2);
-    			long a = indexLongBuffer.get(i * 2 + 1);
-    			indexMsgBuffer[i].setT(t);
-    			indexMsgBuffer[i].setA(a);
-    		}
-    		
-    		// t块内部按a排序
-    		Arrays.sort(indexMsgBuffer, 0, nRecord, aComparator);
-    		
-    		// 计算每小块内记录数量
-    		int aSliceId = 0;
-    		for (int i = 0; i < nRecord; i++) {
-    			Message msg = indexMsgBuffer[i];
-    			long a = msg.getA();
-    			
-    			while (aSliceId < N_ASLICE && a >= aSlicePivot[aSliceId + 1]) aSliceId++;
-    			assert aSliceId == findSliceA(a);
-    			
-    			blockCountTable[tSliceId][aSliceId]++;
-    		}
-    		
-    		// 每小块内再按t排序，并计算前缀和
-    		int recordOffset = 0;
-    		for (aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
-    			int recordCount = blockCountTable[tSliceId][aSliceId];
-    			
-    			Arrays.sort(indexMsgBuffer, recordOffset, recordOffset + recordCount, tComparator);
-    			
-    			for (int i = recordOffset; i < recordOffset + recordCount; i++) {
-    				Message msg = indexMsgBuffer[i];
-    				long l = msg.getT();
-    				long a = msg.getA();
-    				prefixSum[aSliceId] += a;
-    				indexLongBuffer.put(i * 2, l);
-        			indexLongBuffer.put(i * 2 + 1, prefixSum[aSliceId]);
-    			}
-    			
-    			recordOffset += recordCount;
-    		}
-    		
-    		tAxisIndexData.write(indexByteBuffer.array(), 0, nRecord * 16);
-    	}
-    	
-    	System.out.println("[" + new Date() + "]: t-axis index finished");
-    }
-    
-    
-    
-    
-    
-    
-    
     private static final int BATCHSIZE = 3000;
-    
-    
+
     private static void buildIndexForRangeAxisA(int tSliceFrom, int tSliceTo) throws IOException
     {
 //    	System.out.println("[" + new Date() + "]: " + String.format("from=%d to=%d", tSliceFrom, tSliceTo));
@@ -410,6 +332,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	
     	System.out.println("[" + new Date() + "]: a-axis index finished");
+    	
+    	indexByteBuffer = null;
+    	indexMsgBuffer = null;
     }
     
     private static void buildOffsetTable()
@@ -438,44 +363,119 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     
-   
     
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    private static long tValueBuffer[] = new long[1048576];
-    private static int tValueBufferPtr = 0;
-    private static void putTValue(long tValue)
+    private static void buildIndex() throws IOException
     {
-    	tValueBuffer[tValueBufferPtr++] = tValue;
-    	if (tValueBufferPtr == tValueBuffer.length) {
-    		long newBuffer[] = new long[tValueBuffer.length * 2];
-    		System.arraycopy(tValueBuffer, 0, newBuffer, 0, tValueBuffer.length);
-    		tValueBuffer = newBuffer;
+    	// 计算各个块在文件中的偏移
+    	for (int i = 0; i <= tSliceCount; i++) {
+    		if (i > 0) {
+    			tSliceRecordOffset[i] = tSliceRecordOffset[i - 1] + tSliceRecordCount[i - 1];
+    		}
+//    		System.out.println(String.format("t-slice %d: pivot=%d count=%d offset=%d", i, tSlicePivot[i], tSliceRecordCount[i], tSliceRecordOffset[i]));
+    	}
+    	
+    	// 建立内存内偏移表
+    	buildOffsetTable();
+    	
+    	// 建立A轴上的索引
+    	buildIndexAxisA();
+    	
+    	// 关闭用于写入的文件
+    	tAxisPointData.close();
+    	tAxisBodyData.close();
+    	aAxisIndexData.close();
+    	tAxisIndexData.close();
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    private static Message writeBuffer[] = null;
+    private static int writeBufferPtr = 0;
+    
+    private static void reserveWriteBuffer(int n)
+    {
+    	if (writeBuffer == null || writeBuffer.length < n) {
+    		int oldSize;
+    		Message newBuffer[] = new Message[nextSize(n)];
+    		if (writeBuffer == null) {
+    			oldSize = 0;
+    		} else {
+    			oldSize = writeBuffer.length;
+    			System.arraycopy(writeBuffer, 0, newBuffer, 0, oldSize);
+    		}
+    		for (int i = oldSize; i < newBuffer.length; i++) {
+    			newBuffer[i] = new Message(0, 0, new byte[34]);
+    		}
+    		writeBuffer = newBuffer;
     	}
     }
-
-    private static void calcSliceRecordCount(long exclusiveT) throws IOException
+    private static void shiftWriteBuffer(int n)
     {
-		int nInclusive;
-		for (nInclusive = 0; nInclusive < tValueBufferPtr; nInclusive++) {
-			long curT = tValueBuffer[nInclusive];
-			if (curT == exclusiveT) {
+    	if (writeBufferPtr != n) {
+    		int m = writeBufferPtr - n;
+    		
+    		for (int i = 0, j = writeBufferPtr; i < m; i++, j++) {
+    			Message t = writeBuffer[i];
+    			writeBuffer[i] = writeBuffer[j];
+    			writeBuffer[j] = t;
+    		}
+    	}
+    	writeBufferPtr -= n;
+    }
+
+    private static void flushWriteBuffer(long exclusiveT) throws IOException
+    {
+		ByteBuffer pointBuffer = ByteBuffer.allocate(writeBufferPtr * 16);
+		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+		ByteBuffer bodyBuffer = ByteBuffer.allocate(writeBufferPtr * 34);
+		bodyBuffer.order(ByteOrder.LITTLE_ENDIAN);
+		
+		
+//		System.out.println(String.format("flush=%d size=%d", tSliceCount - 1, writeBuffer.size()));
+		int nWrite;
+		for (nWrite = 0; nWrite < writeBufferPtr; nWrite++) {
+			Message curMessage = writeBuffer[nWrite];
+			if (curMessage.getT() == exclusiveT) {
 				break;
 			}
 		}
 
-		tSliceRecordCount[tSliceCount - 1] = nInclusive;
+		int tSliceId = tSliceCount - 1;
 		
-		System.arraycopy(tValueBuffer, nInclusive, tValueBuffer, 0, tValueBufferPtr - nInclusive);
-		tValueBufferPtr -= nInclusive;
+		tSliceRecordCount[tSliceId] = nWrite;
+		
+		// t块内部按a排序
+		Arrays.sort(writeBuffer, 0, nWrite, aComparator);
+		
+		// 计算每小块内记录数量
+		int aSliceId = 0;
+		for (int i = 0; i < nWrite; i++) {
+			Message msg = writeBuffer[i];
+			long a = msg.getA();
+			
+			while (aSliceId < N_ASLICE && a >= aSlicePivot[aSliceId + 1]) aSliceId++;
+			assert aSliceId == findSliceA(a);
+			
+			blockCountTable[tSliceId][aSliceId]++;
+			
+			pointBuffer.putLong(msg.getT());
+			pointBuffer.putLong(msg.getA());
+			bodyBuffer.put(msg.getBody());
+		}
+		
+		shiftWriteBuffer(nWrite);
+		
+		tAxisPointStream.write(pointBuffer.array(), 0, nWrite * 16);
+		tAxisBodyStream.write(bodyBuffer.array(), 0, nWrite * 34);
     }
+
     private static BufferedOutputStream tAxisPointStream;
     private static BufferedOutputStream tAxisBodyStream;
     private static void beginInsertMessage() throws IOException
@@ -486,34 +486,34 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     private static void insertMessage(ByteBuffer buffer, int offset) throws IOException
     {
+    	long curT = buffer.getLong(offset);
     	long curA = buffer.getLong(offset + 8);
-    	globalMinA = Math.min(globalMinA, curA);
-    	globalMaxA = Math.max(globalMaxA, curA);
     	
-		long curT = buffer.getLong(offset);
-		
 		if (insCount % TSLICE_INTERVAL == 0) {
 			if (insCount > 0) {
-				calcSliceRecordCount(curT);
+				flushWriteBuffer(curT);
 			}
 			tSlicePivot[tSliceCount++] = curT;
 		}
 		
-		putTValue(curT);
-		tAxisPointStream.write(buffer.array(), offset, 16);
-		tAxisBodyStream.write(buffer.array(), offset + 16, 34);
+		reserveWriteBuffer(writeBufferPtr + 1);
+		Message message = writeBuffer[writeBufferPtr++];
+		message.setT(curT);
+		message.setA(curA);
+		System.arraycopy(buffer.array(), offset + 16, message.getBody(), 0, 34);
 		
     	insCount++;
     	if (insCount % 1000000 == 0) {
-			System.out.println("[" + new Date() + "]: " + String.format("ins %d: t=%d a=%d", insCount, curT, curA));
+			System.out.println("[" + new Date() + "]: " + String.format("ins %d: %s", insCount, dumpMessage(message)));
 		}
     }
     private static void finishInsertMessage() throws IOException
     {
-    	calcSliceRecordCount(Long.MAX_VALUE);
+    	flushWriteBuffer(Long.MAX_VALUE);
     	tSlicePivot[tSliceCount] = Long.MAX_VALUE;
-    	assert tValueBufferPtr == 0;
-    	tValueBuffer = null;
+    	assert writeBufferPtr == 0;
+    	writeBuffer = null;
+    	
     	tAxisPointStream.close();
     	tAxisPointStream = null;
     	tAxisBodyStream.close();
@@ -585,60 +585,24 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
-    
-    
-    
-    
-    
-    
-    
-    private static void buildIndex() throws IOException
+    private static void calcPivotAxisA()
     {
-    	// 计算各个块在文件中的偏移
-    	for (int i = 0; i <= tSliceCount; i++) {
-    		if (i > 0) {
-    			tSliceRecordOffset[i] = tSliceRecordOffset[i - 1] + tSliceRecordCount[i - 1];
-    		}
-//    		System.out.println(String.format("t-slice %d: pivot=%d count=%d offset=%d", i, tSlicePivot[i], tSliceRecordCount[i], tSliceRecordOffset[i]));
+    	// 计算A的范围
+		int nThread = putThreadCount.get();
+    	for (int i = 0; i < nThread; i++) {
+    		globalMaxA = Math.max(globalMaxA, putTLD[i].maxA);
+    		globalMinA = Math.min(globalMinA, putTLD[i].minA);
     	}
-    	
+		System.out.println(String.format("globalMinA=%d", globalMinA));
+		System.out.println(String.format("globalMaxA=%d", globalMaxA));
+		
     	// 计算a轴上的分割点
     	for (int i = 0; i < N_ASLICE; i++) {
     		aSlicePivot[i] = globalMinA + (globalMaxA - globalMinA) / N_ASLICE * i;
     	}
     	aSlicePivot[N_ASLICE] = Long.MAX_VALUE;
-    	
-    	// 建立T轴上的索引
-    	buildIndexAxisT();
-    	
-    	// 建立内存内偏移表
-    	buildOffsetTable();
-    	
-    	// 建立A轴上的索引
-    	buildIndexAxisA();
-    	
-    	// 关闭用于写入的文件
-    	tAxisPointData.close();
-    	tAxisBodyData.close();
-    	aAxisIndexData.close();
-    	tAxisIndexData.close();
-    	
-    	// 释放临时内存
-    	indexByteBuffer = null;
-    	indexMsgBuffer = null;
     }
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
     
     
     
@@ -664,6 +628,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	ByteBuffer msgData;
     	int outputCount = 0;
+    	long maxA = Long.MIN_VALUE;
+    	long minA = Long.MAX_VALUE;
     	
     	int threadId;
     	String dataFileName;
@@ -730,12 +696,16 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	try {
     		PutThreadLocalData pd = putBuffer.get();
+    		long curT = message.getT();
+    		long curA = message.getA();
     		pd.msgData.position(0);
-    		pd.msgData.putLong(message.getT());
-    		pd.msgData.putLong(message.getA());
+    		pd.msgData.putLong(curT);
+    		pd.msgData.putLong(curA);
     		pd.msgData.put(message.getBody());
-
+    		
     		pd.outputCount++;
+    		pd.maxA = Math.max(pd.maxA, curA);
+    		pd.minA = Math.min(pd.minA, curA);
     		pd.bufferedOutputStream.write(pd.msgData.array());
     		
 		} catch (IOException e) {
@@ -783,7 +753,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				
     				try {
     					
-						flushPutBuffer();
+    					flushPutBuffer();
+						calcPivotAxisA();
+						
 						externalMergeSort();
 						buildIndex();
 						
@@ -795,8 +767,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				
     				
     				System.out.println(String.format("insCount=%d", insCount));
-    				System.out.println(String.format("globalMinA=%d", globalMinA));
-    				System.out.println(String.format("globalMaxA=%d", globalMaxA));
     				
     				System.gc();
 
@@ -851,7 +821,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
 		
-//		Collections.sort(result, tComparator);
+		Collections.sort(result, tComparator);
 
 //		System.out.println("[" + new Date() + "]: " + String.format("queryData: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.size()));
 
@@ -1156,6 +1126,21 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
+    	
+    	
+    	
+    	
+    	
+    	
+    	if (true) return 0;
+    	
+    	
+    	
+    	
+    	
+    	
+    	
+    	
     	
     	int tSliceLow = findSliceT(tMin);
     	int tSliceHigh = findSliceT(tMax);
