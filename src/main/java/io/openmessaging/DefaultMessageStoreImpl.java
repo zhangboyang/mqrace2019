@@ -1,5 +1,7 @@
 package io.openmessaging;
 
+import java.io.BufferedOutputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
@@ -15,6 +17,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.DoubleAdder;
+import java.util.zip.Deflater;
+import java.util.zip.DeflaterOutputStream;
+import java.util.zip.GZIPOutputStream;
 
 /**
  * 这是一个简单的基于内存的实现，以方便选手理解题意；
@@ -89,13 +94,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static volatile int state = 0;
     private static final Object stateLock = new Object();
     
-    static {
-    	Runtime.getRuntime().addShutdownHook(new Thread() {
-    		public void run() {
-    			atShutdown();
-    		}
-    	});
-    }
+//    static {
+//    	Runtime.getRuntime().addShutdownHook(new Thread() {
+//    		public void run() {
+//    			atShutdown();
+//    		}
+//    	});
+//    }
     
 //    private static final String storagePath = "./";
     private static final String storagePath = "/alidata1/race2019/data/";
@@ -561,7 +566,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	    				}
 		    			if (buffer[qid] == null) {
 		    				System.out.println(String.format("put thread %d timeout, assume exited", qid));
-		    				buffer[qid] = putTLD[qid].buffer;
+//		    				buffer[qid] = putTLD[qid].buffer;
 		    				threadExited[qid] = true;
 		    			}
 	    			}
@@ -598,24 +603,32 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final int MAXBUFFER = 2000;
     private static class PutThreadLocalData {
-    	Message[] buffer;
-    	int bufptr;
-    	int threadid;
+    	DeflaterOutputStream deflaterOutputStream;
+    	ByteBuffer msgdata;
     	
-    	void clear() {
-    		buffer = new Message[MAXBUFFER];
-    		bufptr = 0;
-    	}
+    	int threadId;
+    	String outputFileName;
+    	FileOutputStream outputStream;
     }
     private static final PutThreadLocalData putTLD[] = new PutThreadLocalData[MAXTHREAD];
     private static final AtomicInteger putThreadCount = new AtomicInteger();
     private static final ThreadLocal<PutThreadLocalData> putBuffer = new ThreadLocal<PutThreadLocalData>() {
         @Override protected PutThreadLocalData initialValue() {
+        	
         	PutThreadLocalData pd = new PutThreadLocalData();
-        	pd.threadid = putThreadCount.getAndIncrement();
-        	putTLD[pd.threadid] = pd;
-        	insertQueue[pd.threadid] = new ArrayBlockingQueue<Message[]>(MAXQUEUE); 
-        	pd.clear();
+        	pd.threadId = putThreadCount.getAndIncrement();
+        	pd.outputFileName = String.format("thread%04d.data", pd.threadId);
+        	
+        	try {
+        		pd.outputStream = new FileOutputStream(pd.outputFileName);
+				pd.deflaterOutputStream = new DeflaterOutputStream(pd.outputStream, new Deflater(Deflater.BEST_SPEED));
+			} catch (IOException e) {
+				e.printStackTrace();
+				System.exit(-1);
+			}
+        	
+        	pd.msgdata = ByteBuffer.allocate(50);
+        	pd.msgdata.order(ByteOrder.LITTLE_ENDIAN);
         	return pd;
         }
     };
@@ -634,21 +647,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 					assert assertsEnabled = true;
 					
 					System.out.println("assertEnabled=" + assertsEnabled);
-					
-					
-					sortThread = new Thread() {
-					    public void run() {
-					    	try {
-								Thread.sleep(3000);
-							} catch (InterruptedException e) {
-								e.printStackTrace();
-								System.exit(-1);
-							}
-					    	sortThreadProc();
-					    }
-					};
-					sortThread.start();
-					
+
 					state = 1;
     			}
     		}
@@ -656,19 +655,24 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	try {
     		PutThreadLocalData pd = putBuffer.get();
-			pd.buffer[pd.bufptr++] = message;
-			if (pd.bufptr == pd.buffer.length) {
-				insertQueue[pd.threadid].put(pd.buffer);
-				pd.clear();
-			}
-		} catch (InterruptedException e) {
+    		pd.msgdata.position(0);
+    		pd.msgdata.putLong(message.getT());
+    		pd.msgdata.putLong(message.getA());
+    		pd.msgdata.put(message.getBody());
+
+    		pd.deflaterOutputStream.write(pd.msgdata.array());
+//    		pd.outputStream.write(pd.msgdata.array());
+    		
+		} catch (IOException e) {
 			e.printStackTrace();
 			System.exit(-1);
 		}
     }
     
     @Override
-    public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {   	
+    public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {
+    	
+    	if (true) return new ArrayList<Message>();
 
     	if (state == 1) {
     		synchronized (stateLock) {
