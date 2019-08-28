@@ -537,7 +537,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			System.arraycopy(writeBuffer, 0, newBuffer, 0, oldSize);
     		}
     		for (int i = oldSize; i < newBuffer.length; i++) {
-    			newBuffer[i] = new Message(0, 0, new byte[34]);
+    			newBuffer[i] = new Message(0, 0, new byte[5]);
     		}
     		writeBuffer = newBuffer;
     		writeBuffer2 = new Message[newBuffer.length];
@@ -556,32 +556,26 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     
-    private static ByteBuffer pointBuffer = null;
+    private static ByteBuffer pointWriteBuffer = null;
     private static void reservePointBuffer(int nBytes)
     {
-    	if (pointBuffer == null || pointBuffer.capacity() < nBytes) {
-    		pointBuffer = ByteBuffer.allocate(nextSize(nBytes));
-    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+    	if (pointWriteBuffer == null || pointWriteBuffer.capacity() < nBytes) {
+    		pointWriteBuffer = ByteBuffer.allocate(nextSize(nBytes));
+    		pointWriteBuffer.order(ByteOrder.LITTLE_ENDIAN);
     	}
     }
     
-    private static ByteBuffer bodyBuffer = null;
+    private static ByteBuffer bodyWriteBuffer = null;
     private static void reserveBodyBuffer(int nBytes)
     {
-    	if (bodyBuffer == null || bodyBuffer.capacity() < nBytes) {
-    		bodyBuffer = ByteBuffer.allocate(nextSize(nBytes));
-    		bodyBuffer.order(ByteOrder.LITTLE_ENDIAN);
+    	if (bodyWriteBuffer == null || bodyWriteBuffer.capacity() < nBytes) {
+    		bodyWriteBuffer = ByteBuffer.allocate(nextSize(nBytes));
+    		bodyWriteBuffer.order(ByteOrder.LITTLE_ENDIAN);
     	}
     }
 
     private static void flushWriteBuffer(long exclusiveT) throws IOException
     {
-		reservePointBuffer(writeBufferPtr * 16);
-		reserveBodyBuffer(writeBufferPtr * 34);
-		pointBuffer.position(0);
-		bodyBuffer.position(0);
-		
-		
 //		System.out.println(String.format("flush=%d size=%d", tSliceCount - 1, writeBuffer.size()));
 		int nWrite;
 		for (nWrite = 0; nWrite < writeBufferPtr; nWrite++) {
@@ -595,12 +589,24 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		tSliceRecordCount[tSliceId] = nWrite;
 		
+		
+		reservePointBuffer(nWrite * 16);
+		reserveBodyBuffer(nWrite * 21);
+		pointWriteBuffer.position(0);
+		bodyWriteBuffer.position(0);
+		
+		for (int i = 0; i < nWrite; i++) {
+			Message msg = writeBuffer[i];
+			long a = msg.getA();
+			long t = msg.getT();
+			
+			bodyWriteBuffer.putLong(t).putLong(a).put(msg.getBody());
+		}
+		
 		// t块内部按a排序
 		Arrays.sort(writeBuffer, 0, nWrite, aComparator);
-		
-		
-		
-		// 计算每小块内记录数量
+
+		// 计算每小块内记录数量，并写t轴索引
 		int aSliceId = 0;
 		long tValueBase = tSlicePivot[tSliceId];
 		ByteBuffer compressedPointBuffer = ByteBuffer.allocate(18 * nWrite);
@@ -614,9 +620,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			
 			blockCountTable[tSliceId][aSliceId]++;
 			
-			pointBuffer.putLong(t);
-			pointBuffer.putLong(a);
-			bodyBuffer.put(msg.getBody());
+			pointWriteBuffer.putLong(t).putLong(a);
 			
 			ValueCompressor.putToBuffer(compressedPointBuffer, t - tValueBase);
 			ValueCompressor.putToBuffer(compressedPointBuffer, a);
@@ -624,9 +628,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		shiftWriteBuffer(nWrite);
 		
-		tAxisPointStream.write(pointBuffer.array(), 0, nWrite * 16);
-		tAxisBodyStream.write(bodyBuffer.array(), 0, nWrite * 34);
-		
+		tAxisPointStream.write(pointWriteBuffer.array(), 0, nWrite * 16);
+		tAxisBodyStream.write(bodyWriteBuffer.array(), 0, nWrite * 21);
 		
 		tAxisCompressedPointStream.write(compressedPointBuffer.array(), 0, compressedPointBuffer.position());
 		tSliceCompressedPointByteOffset[tSliceId + 1] = tSliceCompressedPointByteOffset[tSliceId] + compressedPointBuffer.position();
@@ -642,7 +645,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	tAxisBodyStream = new BufferedOutputStream(new FileOutputStream(tAxisBodyFile));
     	tAxisCompressedPointStream = new BufferedOutputStream(new FileOutputStream(tAxisCompressedPointFile));
     }
-    private static void insertMessage(long curT, long curA, ByteBuffer buffer) throws IOException
+    private static void insertMessage(long curT, long curA, int threadId, int recordId) throws IOException
     {
     	if (insCount % TSLICE_INTERVAL == 0) {
 			if (insCount > 0) {
@@ -655,7 +658,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		Message message = writeBuffer[writeBufferPtr++];
 		message.setT(curT);
 		message.setA(curA);
-		buffer.get(message.getBody());
+		ByteBuffer.wrap(message.getBody()).order(ByteOrder.LITTLE_ENDIAN).putInt(recordId).put((byte)threadId);
 		
     	insCount++;
     	if (insCount % 1000000 == 0) {
@@ -701,8 +704,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		for (int i = 0; i < nThread; i++) {
 			recordCount[i] = putTLD[i].outputCount;
 			readCount[i] = 0;
-			putTLD[i].bufferedInputStream = new BufferedInputStream(new FileInputStream(putTLD[i].dataFileName));
-			putTLD[i].bufferedInputStream.read(queueData[i].array(), 0, queueData[i].capacity());
+			putTLD[i].pointInputStream = new FileInputStream(putTLD[i].pointFileName);
+			putTLD[i].pointInputStream.read(queueData[i].array(), 0, queueData[i].capacity());
 			readRemaining[i] = putTLD[i].outputBytes - queueData[i].capacity();
 			queueHead[i] = ValueCompressor.getFromBuffer(queueData[i]);
 		}
@@ -726,7 +729,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			}
 			
 			long aValue = ValueCompressor.getFromBuffer(queueData[minPos]); 
-			insertMessage(minValue, aValue, queueData[minPos]);
+			insertMessage(minValue, aValue, minPos, readCount[minPos]);
 			
 			if (++readCount[minPos] >= recordCount[minPos]) {
 				queueHead[minPos] = Long.MAX_VALUE;
@@ -738,7 +741,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 					buffer.position(0);
 					int nReadBytes = (int)Math.min(buffer.capacity() - nCopy, readRemaining[minPos]);
 					if (nReadBytes > 0) {
-						putTLD[minPos].bufferedInputStream.read(buffer.array(), nCopy, nReadBytes);
+						putTLD[minPos].pointInputStream.read(buffer.array(), nCopy, nReadBytes);
 						readRemaining[minPos] -= nReadBytes;
 					}
 				}
@@ -750,8 +753,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		finishInsertMessage();
 		
 		for (int i = 0; i < nThread; i++) {
-			putTLD[i].bufferedInputStream.close();
-			putTLD[i].bufferedInputStream = null;
+			putTLD[i].pointInputStream.close();
+			putTLD[i].pointInputStream = null;
 		}
 		System.out.println("[" + new Date().toString() + "]: merge-sort completed!");
     }
@@ -809,12 +812,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int MAXTHREAD = 100;
 
     private static class PutThreadLocalData {
-    	BufferedOutputStream bufferedOutputStream;
-    	BufferedInputStream bufferedInputStream;
+    	BufferedOutputStream bufferedPointOutputStream;
+    	BufferedOutputStream bufferedBodyOutputStream;
+    	FileInputStream pointInputStream;
     	
     	long lastT = 0;
     	
-    	ByteBuffer msgData;
     	int outputCount = 0;
     	long outputBytes = 0;
     	
@@ -823,9 +826,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	long minA = Long.MAX_VALUE;
     	
     	int threadId;
-    	String dataFileName;
-    	
+    	String pointFileName;
+    	String bodyFileName;
     }
+    
     private static final PutThreadLocalData putTLD[] = new PutThreadLocalData[MAXTHREAD];
     private static final AtomicInteger putThreadCount = new AtomicInteger();
     private static final ThreadLocal<PutThreadLocalData> putBuffer = new ThreadLocal<PutThreadLocalData>() {
@@ -834,17 +838,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
         	PutThreadLocalData pd = new PutThreadLocalData();
         	pd.threadId = putThreadCount.getAndIncrement();
         	putTLD[pd.threadId] = pd;
-        	pd.dataFileName = String.format("thread%04d.data", pd.threadId);
+        	pd.pointFileName = String.format("thread%04d.zp.data", pd.threadId);
+        	pd.bodyFileName = String.format("thread%04d.body.data", pd.threadId);
         	
         	try {
-        		pd.bufferedOutputStream = new BufferedOutputStream(new FileOutputStream(pd.dataFileName));
+        		pd.bufferedPointOutputStream = new BufferedOutputStream(new FileOutputStream(pd.pointFileName));
+        		pd.bufferedBodyOutputStream = new BufferedOutputStream(new FileOutputStream(pd.bodyFileName));
 			} catch (IOException e) {
 				e.printStackTrace();
 				System.exit(-1);
 			}
         	
-        	pd.msgData = ByteBuffer.allocate(50+2); // 压缩后的数据可能更大，所以预留一些空间
-        	pd.msgData.order(ByteOrder.LITTLE_ENDIAN);
         	return pd;
         }
     };
@@ -858,8 +862,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		for (int i = 0; i < nThread; i++) {
 			PutThreadLocalData pd = putTLD[i];
 			
-			pd.bufferedOutputStream.close();
-			pd.bufferedOutputStream = null;
+			pd.bufferedPointOutputStream.close();
+			pd.bufferedPointOutputStream = null;
 			
 			System.out.println(String.format("thread %d: %d", i, pd.outputCount));
 			globalTotalRecords += pd.outputCount;
@@ -889,14 +893,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		PutThreadLocalData pd = putBuffer.get();
     		long curT = message.getT();
     		long curA = message.getA();
-    		pd.msgData.position(0);
-    		ValueCompressor.putToBuffer(pd.msgData, curT - pd.lastT);
-    		pd.lastT = curT;
-    		ValueCompressor.putToBuffer(pd.msgData, curA);
-    		pd.msgData.put(message.getBody());
     		
-    		pd.bufferedOutputStream.write(pd.msgData.array(), 0, pd.msgData.position());
-    		pd.outputBytes += pd.msgData.position();
+    		ByteBuffer pointBuffer = ByteBuffer.allocate(18);
+    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+    		ValueCompressor.putToBuffer(pointBuffer, curT - pd.lastT);
+    		pd.lastT = curT;
+    		ValueCompressor.putToBuffer(pointBuffer, curA);
+    		
+    		pd.bufferedPointOutputStream.write(pointBuffer.array(), 0, pointBuffer.position());
+    		pd.outputBytes += pointBuffer.position();
+    		
+    		pd.bufferedBodyOutputStream.write(message.getBody());
     		
     		pd.outputCount++;
     		pd.maxA = Math.max(pd.maxA, curA);
@@ -991,30 +998,24 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		int baseOffset = tSliceRecordOffset[tSliceLow];
     		int nRecord = tSliceRecordOffset[tSliceHigh + 1] - tSliceRecordOffset[tSliceLow];
     		
-    		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
-    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
-    		ByteBuffer bodyBuffer = ByteBuffer.allocate(nRecord * 34);
-    		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+    		ByteBuffer bodyBuffer = ByteBuffer.allocate(nRecord * 21);
+    		bodyBuffer.order(ByteOrder.LITTLE_ENDIAN);
 
-			int nPointRead = tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
-			int nBodyRead = tAxisBodyChannel.read(bodyBuffer, (long)baseOffset * 34);
-			assert nPointRead == nRecord * 16;
-			assert nBodyRead == nRecord * 34;
+			int nBodyRead = tAxisBodyChannel.read(bodyBuffer, (long)baseOffset * 21);
+
+			assert nBodyRead == nRecord * 21;
 			
-			pointBuffer.position(0);
-			LongBuffer pointBufferL = pointBuffer.asLongBuffer();
-			
-			for (int i = 0; i < nRecord; i++) {
-				long t = pointBufferL.get();
-				long a = pointBufferL.get();
-				
-				if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
-					byte body[] = new byte[34];
-					bodyBuffer.position(i * 34);
-					bodyBuffer.get(body);
-					result.add(new Message(a, t, body));
-				}
-			}
+//			for (int i = 0; i < nRecord; i++) {
+//				long t = bodyBuffer.getLong();
+//				long a = bodyBuffer.getLong();
+//				int recordId = bodyBuffer.getInt();
+//				int threadId = bodyBuffer.get();
+//				
+//				if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
+//					byte body[] = new byte[34];
+//					result.add(new Message(a, t, body));
+//				}
+//			}
 
     		
 		} catch (IOException e) {
@@ -1022,7 +1023,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
 		
-		Collections.sort(result, tComparator);
+//		Collections.sort(result, tComparator);
 
 //		System.out.println("[" + new Date() + "]: " + String.format("queryData: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.size()));
 
