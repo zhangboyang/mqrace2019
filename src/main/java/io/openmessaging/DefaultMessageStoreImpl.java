@@ -13,6 +13,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
@@ -759,11 +760,16 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		System.out.println(String.format("globalMinA=%d", globalMinA));
 		System.out.println(String.format("globalMaxA=%d", globalMaxA));
 		
-    	// 计算a轴上的分割点
+		// 计算样本的中位数，作为a轴上的分割点
+		Collections.sort(aSamples);
     	for (int i = 0; i < N_ASLICE; i++) {
-    		aSlicePivot[i] = globalMinA + (globalMaxA - globalMinA) / N_ASLICE * i;
+    		aSlicePivot[i] = aSamples.get(aSamples.size() / N_ASLICE * i).longValue();
     	}
+    	aSlicePivot[0] = globalMinA;
     	aSlicePivot[N_ASLICE] = Long.MAX_VALUE;
+    	for (int i = 0; i <= N_ASLICE; i++) {
+    		System.out.println(String.format("aSlicePivot[%d]=%d", i, aSlicePivot[i]));
+    	}
     }
 
     
@@ -782,6 +788,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
+    private static final int SAMPLE_P = MAXMSG / 10000;
+    private static final ArrayList<Long> aSamples = new ArrayList<Long>();
     
     private static final int MAXTHREAD = 100;
 
@@ -870,6 +878,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		pd.maxA = Math.max(pd.maxA, curA);
     		pd.minA = Math.min(pd.minA, curA);
     		pd.bufferedOutputStream.write(pd.msgData.array());
+    		
+    		// 从数据中抽样一些数据，用于计算A的分割点
+    		if (ThreadLocalRandom.current().nextInt(SAMPLE_P) == 0) {
+    			synchronized (aSamples) {
+    				aSamples.add(Long.valueOf(curA));
+    			}
+    		}
     		
 		} catch (IOException e) {
 			e.printStackTrace();
