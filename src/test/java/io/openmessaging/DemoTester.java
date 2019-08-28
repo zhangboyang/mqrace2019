@@ -48,7 +48,7 @@ public class DemoTester {
         //发送的线程数量
         int sendTsNum = 10;
         //查询的线程数量
-        int checkTsNum = 40;
+        int checkTsNum = 1;
         // 每次查询消息的最大跨度
         int maxMsgCheckSize = 100000;
         // 每次查询求平均的最大跨度
@@ -93,16 +93,14 @@ public class DemoTester {
         AtomicLong msgCheckTimes = new AtomicLong(0);
         AtomicLong msgCheckNum = new AtomicLong(0);
         Thread[] msgChecks = new Thread[checkTsNum];
-        if (TESTMODE == 1) {
-	        for (int i = 0; i < checkTsNum; i++) {
-	            msgChecks[i] = new Thread(new MessageChecker(messageStore, maxCheckTime, /*checkTimes*/getMessageTimes, msgNum, maxMsgCheckSize, msgCheckTimes, msgCheckNum));
-	        }
-	        for (int i = 0; i < checkTsNum; i++) {
-	            msgChecks[i].start();
-	        }
-	        for (int i = 0; i < checkTsNum; i++) {
-	            msgChecks[i].join();
-	        }
+        for (int i = 0; i < checkTsNum; i++) {
+            msgChecks[i] = new Thread(new MessageChecker(messageStore, maxCheckTime, /*checkTimes*/getMessageTimes, msgNum, maxMsgCheckSize, msgCheckTimes, msgCheckNum));
+        }
+        for (int i = 0; i < checkTsNum; i++) {
+            msgChecks[i].start();
+        }
+        for (int i = 0; i < checkTsNum; i++) {
+            msgChecks[i].join();
         }
         long msgCheckEnd = System.currentTimeMillis();
         System.out.printf("Message Check: %d ms Num:%d\n", msgCheckEnd - msgCheckStart, msgCheckNum.get());

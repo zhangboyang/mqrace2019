@@ -53,6 +53,134 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
+    private static class ValueCompressor {
+    	// 数值压缩器：用类似UTF-8的变长编码来压缩一个64位整数（这是通用的算法！！！）
+    	// 压缩后的数据最长可能需要9字节
+    	
+    	// 编码说明：
+    	//    0xxxxxxx   1字节-7bit
+    	//    10xxxxxx xxxxxxxx   2字节-14bit
+    	//    110xxxxx xxxxxxxx xxxxxxxx   3字节-21bit
+    	//    1110xxxx xxxxxxxx xxxxxxxx xxxxxxxx   4字节-28bit
+    	//    11110xxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx   5字节-35bit
+    	//    111110xx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx   6字节-42bit
+    	//    1111110x xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx  7字节-49bit
+    	//    11111110 xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx   8字节-56bit
+    	//    11111111 xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx  9字节-64bit
+    	
+    	public static void putToBuffer(ByteBuffer buffer, long value)
+    	{
+    		if ((value & 0x7fL) == value) {
+    			buffer.put((byte)(value));
+    		} else if ((value & 0x3fffL) == value) {
+    			buffer.put((byte)((value >>> 8) | 0x80));
+    			buffer.put((byte)(value));
+    		} else if ((value & 0x1fffffL) == value) {
+    			buffer.put((byte)((value >>> 16) | 0xc0));
+    			buffer.put((byte)(value >>> 8));
+    			buffer.put((byte)(value));
+    		} else if ((value & 0xfffffffL) == value) {
+    			buffer.put((byte)((value >>> 24) | 0xe0));
+    			buffer.put((byte)(value >>> 16));
+    			buffer.put((byte)(value >>> 8));
+    			buffer.put((byte)(value));
+    		} else if ((value & 0x7ffffffffL) == value) {
+    			buffer.put((byte)((value >>> 32) | 0xf0));
+    			buffer.put((byte)(value >>> 24));
+    			buffer.put((byte)(value >>> 16));
+    			buffer.put((byte)(value >>> 8));
+    			buffer.put((byte)(value));
+    		} else if ((value & 0x3ffffffffffL) == value) {
+    			buffer.put((byte)((value >>> 40) | 0xf8));
+    			buffer.put((byte)(value >>> 32));
+    			buffer.put((byte)(value >>> 24));
+    			buffer.put((byte)(value >>> 16));
+    			buffer.put((byte)(value >>> 8));
+    			buffer.put((byte)(value));
+    		} else if ((value & 0x1ffffffffffffL) == value) {
+    			buffer.put((byte)((value >>> 48) | 0xfc));
+    			buffer.put((byte)(value >>> 40));
+    			buffer.put((byte)(value >>> 32));
+    			buffer.put((byte)(value >>> 24));
+    			buffer.put((byte)(value >>> 16));
+    			buffer.put((byte)(value >>> 8));
+    			buffer.put((byte)(value));
+    		} else if ((value & 0xffffffffffffffL) == value) {
+    			buffer.put((byte)0xfe);
+    			buffer.put((byte)(value >>> 48));
+    			buffer.put((byte)(value >>> 40));
+    			buffer.put((byte)(value >>> 32));
+    			buffer.put((byte)(value >>> 24));
+    			buffer.put((byte)(value >>> 16));
+    			buffer.put((byte)(value >>> 8));
+    			buffer.put((byte)(value));
+    		} else {
+    			buffer.put((byte)0xff);
+    			buffer.putLong(value);
+    		}
+    	}
+    	
+    	public static long getFromBuffer(ByteBuffer buffer)
+    	{
+    		long value;
+    		long firstbyte = ((int)buffer.get()) & 0xff;
+    		if (firstbyte < 0x80) {
+    			value = firstbyte;
+    		} else if (firstbyte < 0xc0) {
+    			value = (firstbyte & 0x3f) << 8; 
+    			value |= ((long)buffer.get() & 0xff);
+    		} else if (firstbyte < 0xe0) {
+    			value = (firstbyte & 0x1f) << 16; 
+    			value |= ((long)buffer.get() & 0xff) << 8;
+    			value |= ((long)buffer.get() & 0xff);
+    		} else if (firstbyte < 0xf0) {
+    			value = (firstbyte & 0x0f) << 24; 
+    			value |= ((long)buffer.get() & 0xff) << 16;
+    			value |= ((long)buffer.get() & 0xff) << 8;
+    			value |= ((long)buffer.get() & 0xff);
+    		} else if (firstbyte < 0xf8) {
+    			value = (firstbyte & 0x07) << 32; 
+    			value |= ((long)buffer.get() & 0xff) << 24;
+    			value |= ((long)buffer.get() & 0xff) << 16;
+    			value |= ((long)buffer.get() & 0xff) << 8;
+    			value |= ((long)buffer.get() & 0xff);
+    		} else if (firstbyte < 0xfc) {
+    			value = (firstbyte & 0x03) << 40; 
+    			value |= ((long)buffer.get() & 0xff) << 32;
+    			value |= ((long)buffer.get() & 0xff) << 24;
+    			value |= ((long)buffer.get() & 0xff) << 16;
+    			value |= ((long)buffer.get() & 0xff) << 8;
+    			value |= ((long)buffer.get() & 0xff);
+    		} else if (firstbyte < 0xfe) {
+    			value = (firstbyte & 0x01) << 48; 
+    			value |= ((long)buffer.get() & 0xff) << 40;
+    			value |= ((long)buffer.get() & 0xff) << 32;
+    			value |= ((long)buffer.get() & 0xff) << 24;
+    			value |= ((long)buffer.get() & 0xff) << 16;
+    			value |= ((long)buffer.get() & 0xff) << 8;
+    			value |= ((long)buffer.get() & 0xff);
+    		} else if (firstbyte < 0xff) {
+    			value = ((long)buffer.get() & 0xff) << 48;
+    			value |= ((long)buffer.get() & 0xff) << 40;
+    			value |= ((long)buffer.get() & 0xff) << 32;
+    			value |= ((long)buffer.get() & 0xff) << 24;
+    			value |= ((long)buffer.get() & 0xff) << 16;
+    			value |= ((long)buffer.get() & 0xff) << 8;
+    			value |= ((long)buffer.get() & 0xff);
+    		} else {
+    			value = buffer.getLong();
+    		}
+    		
+    		return value;
+    	}
+    }
+    
+    
+    
+    
+    
+    
+    
 	private static void printFile(String path)
 	{
 		System.out.println(String.format("======== %s ========", path)); 
@@ -125,46 +253,57 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final String tAxisPointFile = storagePath + "tAxis.point.data";
     private static final String tAxisBodyFile = storagePath + "tAxis.body.data";
+    private static final String tAxisCompressedPointFile = storagePath + "tAxis.zp.data";
     private static final String aAxisIndexFile = storagePath + "aAxis.index.data";
     
     private static final RandomAccessFile tAxisPointData;
     private static final RandomAccessFile tAxisBodyData;
+    private static final RandomAccessFile tAxisCompressedPointData;
     private static final RandomAccessFile aAxisIndexData;
     
     private static final FileChannel tAxisPointChannel;
     private static final FileChannel tAxisBodyChannel;
+    private static final FileChannel tAxisCompressedPointChannel;
     private static final FileChannel aAxisIndexChannel;
     
+    
     static {
-    	RandomAccessFile tpFile, tbFile, aIndexFile;
-    	FileChannel tpChannel, tbChannel, aIndexChannel;
+    	RandomAccessFile tpFile, tbFile, tzpFile, aIndexFile;
+    	FileChannel tpChannel, tbChannel, tzpChannel, aIndexChannel;
     	try {
 			tpFile = new RandomAccessFile(tAxisPointFile, "rw");
 			tpFile.setLength(0);
 			tbFile = new RandomAccessFile(tAxisBodyFile, "rw");
 			tbFile.setLength(0);
+			tzpFile = new RandomAccessFile(tAxisCompressedPointFile, "rw");
+			tzpFile.setLength(0);
 			aIndexFile = new RandomAccessFile(aAxisIndexFile, "rw");
 			aIndexFile.setLength(0);
 			
 			tpChannel = FileChannel.open(Paths.get(tAxisPointFile));
 			tbChannel = FileChannel.open(Paths.get(tAxisBodyFile));
+			tzpChannel = FileChannel.open(Paths.get(tAxisCompressedPointFile));
 			aIndexChannel = FileChannel.open(Paths.get(aAxisIndexFile));
 			
 		} catch (IOException e) {
 			tpFile = null;
 			tbFile = null;
+			tzpFile = null;
 			aIndexFile = null;
 			tpChannel = null;
 			tbChannel = null;
+			tzpChannel = null;
 			aIndexChannel = null;
 			e.printStackTrace();
 			System.exit(-1);
 		}
     	tAxisPointData = tpFile;
     	tAxisBodyData = tbFile;
+    	tAxisCompressedPointData = tzpFile;
     	aAxisIndexData = aIndexFile;
         tAxisPointChannel = tpChannel;
         tAxisBodyChannel = tbChannel;
+        tAxisCompressedPointChannel = tzpChannel;
         aAxisIndexChannel = aIndexChannel;
     }
     
@@ -180,6 +319,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int tSliceRecordCount[] = new int[N_TSLICE + 1];
     private static final int tSliceRecordOffset[] = new int[N_TSLICE + 1];
     
+    private static final long tSliceCompressedPointByteOffset[] = new long[N_TSLICE + 1]; // FIXME: 改成二维？
     
     private static final long aSlicePivot[] = new long[N_ASLICE + 1];
     
@@ -367,6 +507,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	// 关闭用于写入的文件
     	tAxisPointData.close();
     	tAxisBodyData.close();
+    	tAxisCompressedPointData.close();
     	aAxisIndexData.close();
     }
     
@@ -456,35 +597,49 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		// t块内部按a排序
 		Arrays.sort(writeBuffer, 0, nWrite, aComparator);
 		
+		
+		
 		// 计算每小块内记录数量
 		int aSliceId = 0;
+		long tValueBase = tSlicePivot[tSliceId];
+		ByteBuffer compressedPointBuffer = ByteBuffer.allocate(18 * nWrite);
 		for (int i = 0; i < nWrite; i++) {
 			Message msg = writeBuffer[i];
 			long a = msg.getA();
+			long t = msg.getT();
 			
 			while (aSliceId < N_ASLICE && a >= aSlicePivot[aSliceId + 1]) aSliceId++;
 //			assert aSliceId == findSliceA(a);
 			
 			blockCountTable[tSliceId][aSliceId]++;
 			
-			pointBuffer.putLong(msg.getT());
-			pointBuffer.putLong(msg.getA());
+			pointBuffer.putLong(t);
+			pointBuffer.putLong(a);
 			bodyBuffer.put(msg.getBody());
+			
+			ValueCompressor.putToBuffer(compressedPointBuffer, t - tValueBase);
+			ValueCompressor.putToBuffer(compressedPointBuffer, a);
 		}
 		
 		shiftWriteBuffer(nWrite);
 		
 		tAxisPointStream.write(pointBuffer.array(), 0, nWrite * 16);
 		tAxisBodyStream.write(bodyBuffer.array(), 0, nWrite * 34);
+		
+		
+		tAxisCompressedPointStream.write(compressedPointBuffer.array(), 0, compressedPointBuffer.position());
+		tSliceCompressedPointByteOffset[tSliceId + 1] = tSliceCompressedPointByteOffset[tSliceId] + compressedPointBuffer.position();
     }
 
     private static BufferedOutputStream tAxisPointStream;
     private static BufferedOutputStream tAxisBodyStream;
+    private static BufferedOutputStream tAxisCompressedPointStream;
     private static void beginInsertMessage() throws IOException
     {
     	reserveDiskSpace(tAxisPointFile, (long)globalTotalRecords * 16);
     	tAxisPointStream = new BufferedOutputStream(new FileOutputStream(tAxisPointFile));
     	tAxisBodyStream = new BufferedOutputStream(new FileOutputStream(tAxisBodyFile));
+    	tAxisCompressedPointStream = new BufferedOutputStream(new FileOutputStream(tAxisCompressedPointFile));
     }
     private static void insertMessage(ByteBuffer buffer, int offset) throws IOException
     {
@@ -521,6 +676,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	tAxisPointStream = null;
     	tAxisBodyStream.close();
     	tAxisBodyStream = null;
+    	tAxisCompressedPointStream.close();
+    	tAxisCompressedPointStream = null;
     }
     
 
@@ -865,7 +1022,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     
-    private static final int MAXPLAN = 2;
+    private static final int MAXPLAN = 3;
     private static final double IOSIZE_FACTOR = 27400; // SSD速度为 200MB/s 10000IOPS  这样算每个IO大约20KB
     
     private static class AverageResult {
@@ -1109,6 +1266,45 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
+	////////////////////////////////////////////////////////////////////////////////////////
+	// 算法2：对t轴上的分块进行暴力查找
+    
+    private static void queryAlgorithm2(AverageResult result, boolean doRealQuery, int tSliceLow, int tSliceHigh, int aSliceLow, int aSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
+    {
+		long baseOffset = tSliceCompressedPointByteOffset[tSliceLow];
+		long nBytes = tSliceCompressedPointByteOffset[tSliceHigh + 1] - baseOffset;
+		result.addIOCost(nBytes);
+		if (!doRealQuery) return;
+		result.tAxisIOCount++; // FIXME: 分开统计？
+		result.tAxisIOBytes += nBytes;
+		
+		
+		ByteBuffer pointBuffer = ByteBuffer.allocate((int)nBytes);
+		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
+		tAxisCompressedPointChannel.read(pointBuffer, baseOffset);
+		pointBuffer.position(0);
+		
+		for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
+			int nRecord = tSliceRecordCount[tSliceId];
+			long tValueBase = tSlicePivot[tSliceId];
+			for (int i = 0; i < nRecord; i++) {
+				long t = tValueBase + ValueCompressor.getFromBuffer(pointBuffer);
+				long a = ValueCompressor.getFromBuffer(pointBuffer);
+//				System.out.println("t=" + t + " a=" + a);
+		
+				if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
+					result.sum += a;
+					result.cnt++;
+				}
+			}
+		}
+		assert pointBuffer.position() == pointBuffer.capacity();
+    }
+    
+    
+    
+    
+    
     
     ////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1121,6 +1317,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	switch (planId) {
     	case 0: queryAlgorithm0(result, doRealQuery, tSliceLow, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax); break;
     	case 1: queryAlgorithm1(result, doRealQuery, tSliceLow, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax); break;
+    	case 2: queryAlgorithm2(result, doRealQuery, tSliceLow, tSliceHigh, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax); break;
     	default: assert false;
     	}
     }
@@ -1142,7 +1339,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		}
     	}
     	
-//    	optimalPlanId = 0;
+//    	optimalPlanId = 2;
     	return optimalPlanId;
     }
     
