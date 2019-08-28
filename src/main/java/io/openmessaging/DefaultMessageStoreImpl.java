@@ -642,12 +642,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	tAxisBodyStream = new BufferedOutputStream(new FileOutputStream(tAxisBodyFile));
     	tAxisCompressedPointStream = new BufferedOutputStream(new FileOutputStream(tAxisCompressedPointFile));
     }
-    private static void insertMessage(ByteBuffer buffer, int offset) throws IOException
+    private static void insertMessage(long curT, long curA, ByteBuffer buffer) throws IOException
     {
-    	long curT = buffer.getLong(offset);
-    	long curA = buffer.getLong(offset + 8);
-    	
-		if (insCount % TSLICE_INTERVAL == 0) {
+    	if (insCount % TSLICE_INTERVAL == 0) {
 			if (insCount > 0) {
 				flushWriteBuffer(curT);
 			}
@@ -658,7 +655,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		Message message = writeBuffer[writeBufferPtr++];
 		message.setT(curT);
 		message.setA(curA);
-		System.arraycopy(buffer.array(), offset + 16, message.getBody(), 0, 34);
+		buffer.get(message.getBody());
 		
     	insCount++;
     	if (insCount % 1000000 == 0) {
@@ -690,19 +687,24 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
 		int nThread = putThreadCount.get();
 		
-		ByteBuffer queueHeadData = ByteBuffer.allocate(64 * nThread); // 还是按64字节对齐一下吧
-		queueHeadData.order(ByteOrder.LITTLE_ENDIAN);
+		ByteBuffer queueData[] = new ByteBuffer[nThread];
+		for (int i = 0; i < nThread; i++) {
+			queueData[i] = ByteBuffer.allocate(4096);
+			queueData[i].order(ByteOrder.LITTLE_ENDIAN);
+		}
+		
 		int readCount[] = new int[nThread]; 
 		int recordCount[] = new int[nThread];
+		long readRemaining[] = new long[nThread];
 		long queueHead[] = new long[nThread];
-		
 		
 		for (int i = 0; i < nThread; i++) {
 			recordCount[i] = putTLD[i].outputCount;
 			readCount[i] = 0;
 			putTLD[i].bufferedInputStream = new BufferedInputStream(new FileInputStream(putTLD[i].dataFileName));
-			putTLD[i].bufferedInputStream.read(queueHeadData.array(), i * 64, 50);
-			queueHead[i] = queueHeadData.getLong(i * 64);
+			putTLD[i].bufferedInputStream.read(queueData[i].array(), 0, queueData[i].capacity());
+			readRemaining[i] = putTLD[i].outputBytes - queueData[i].capacity();
+			queueHead[i] = ValueCompressor.getFromBuffer(queueData[i]);
 		}
 		
 		beginInsertMessage();
@@ -723,12 +725,25 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				break;
 			}
 			
-			insertMessage(queueHeadData, minPos * 64);
+			long aValue = ValueCompressor.getFromBuffer(queueData[minPos]); 
+			insertMessage(minValue, aValue, queueData[minPos]);
+			
 			if (++readCount[minPos] >= recordCount[minPos]) {
 				queueHead[minPos] = Long.MAX_VALUE;
 			} else {
-				putTLD[minPos].bufferedInputStream.read(queueHeadData.array(), minPos * 64, 50);
-				queueHead[minPos] = queueHeadData.getLong(minPos * 64);
+				ByteBuffer buffer = queueData[minPos];
+				if (buffer.remaining() < 64) {
+					int nCopy = buffer.remaining();
+					System.arraycopy(buffer.array(), buffer.position(), buffer.array(), 0, nCopy);
+					buffer.position(0);
+					int nReadBytes = (int)Math.min(buffer.capacity() - nCopy, readRemaining[minPos]);
+					if (nReadBytes > 0) {
+						putTLD[minPos].bufferedInputStream.read(buffer.array(), nCopy, nReadBytes);
+						readRemaining[minPos] -= nReadBytes;
+					}
+				}
+				
+				queueHead[minPos] += ValueCompressor.getFromBuffer(queueData[minPos]); 
 			}
 		}
 		
@@ -760,7 +775,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		System.out.println(String.format("globalMinA=%d", globalMinA));
 		System.out.println(String.format("globalMaxA=%d", globalMaxA));
 		
-		// 计算样本的中位数，作为a轴上的分割点
+		// 计算样本的n分位数，作为a轴上的分割点
 		Collections.sort(aSamples);
     	for (int i = 0; i < N_ASLICE; i++) {
     		aSlicePivot[i] = aSamples.get(aSamples.size() / N_ASLICE * i).longValue();
@@ -797,8 +812,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	BufferedOutputStream bufferedOutputStream;
     	BufferedInputStream bufferedInputStream;
     	
+    	long lastT = 0;
+    	
     	ByteBuffer msgData;
     	int outputCount = 0;
+    	long outputBytes = 0;
+    	
+    	
     	long maxA = Long.MIN_VALUE;
     	long minA = Long.MAX_VALUE;
     	
@@ -823,7 +843,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				System.exit(-1);
 			}
         	
-        	pd.msgData = ByteBuffer.allocate(50);
+        	pd.msgData = ByteBuffer.allocate(50+2); // 压缩后的数据可能更大，所以预留一些空间
         	pd.msgData.order(ByteOrder.LITTLE_ENDIAN);
         	return pd;
         }
@@ -870,14 +890,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		long curT = message.getT();
     		long curA = message.getA();
     		pd.msgData.position(0);
-    		pd.msgData.putLong(curT);
-    		pd.msgData.putLong(curA);
+    		ValueCompressor.putToBuffer(pd.msgData, curT - pd.lastT);
+    		pd.lastT = curT;
+    		ValueCompressor.putToBuffer(pd.msgData, curA);
     		pd.msgData.put(message.getBody());
+    		
+    		pd.bufferedOutputStream.write(pd.msgData.array(), 0, pd.msgData.position());
+    		pd.outputBytes += pd.msgData.position();
     		
     		pd.outputCount++;
     		pd.maxA = Math.max(pd.maxA, curA);
     		pd.minA = Math.min(pd.minA, curA);
-    		pd.bufferedOutputStream.write(pd.msgData.array());
     		
     		// 从数据中抽样一些数据，用于计算A的分割点
     		if (ThreadLocalRandom.current().nextInt(SAMPLE_P) == 0) {

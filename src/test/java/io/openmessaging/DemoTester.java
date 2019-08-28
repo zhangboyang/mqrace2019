@@ -155,7 +155,7 @@ public class DemoTester {
     	    }
     	    return data;
     	}
-        static final byte[] bodyTemplate = hexStringToByteArray("0000000000158BE00000000000160BE50D2125260B5E5B2B0C3741265C0C36070000");
+        static final byte[] bodyTemplate = hexStringToByteArray("CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC");
 		
     	private static byte[] getBody(long t, long a)
     	{
