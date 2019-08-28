@@ -850,12 +850,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
+    private static final AverageResult queryTLD[] = new AverageResult[MAXTHREAD];
+    private static final AtomicInteger queryThreadCount = new AtomicInteger();
+    private static final ThreadLocal<AverageResult> averageResult = new ThreadLocal<AverageResult>() {
+        @Override protected AverageResult initialValue() {
+        	return queryTLD[queryThreadCount.getAndIncrement()];
+        }
+    };
     
-    
-    
-    
-    
-    
+    static {
+    	for (int i = 0; i < MAXTHREAD; i++) {
+    		queryTLD[i] = new AverageResult();
+    	}
+    }
     
     
     private static final int MAXPLAN = 2;
@@ -884,8 +891,23 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		// 若IO字节数太大，则把IO字节数换算成IO次数，计算代价
     		ioCost[curPlan] += Math.max(1.0, nBytes / IOSIZE_FACTOR);
     	}
-
+    	
+    	//////////////
+    	
+    	void reset()
+    	{
+    		sum = 0;
+    		cnt = 0;
+    		
+    		tAxisIOCount = 0;
+    		tAxisIOBytes = 0;
+    		aAxisIOCount = 0;
+    		aAxisIOBytes = 0;
+    	}
     }
+    
+    
+    
     
     
     ////////////////////////////////////////////////////////////////////////////////////////
@@ -901,7 +923,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOCount++;
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocateDirect(nRecord * 16);
+		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
@@ -942,15 +964,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOCount += 2;
 		result.aAxisIOBytes += (nRecordLow + nRecordHigh) * 8;
 		
-		
-		ByteBuffer lowBuffer = ByteBuffer.allocateDirect(nRecordLow * 8);
+		ByteBuffer lowBuffer = ByteBuffer.allocate(nRecordLow * 8);
 		lowBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		aAxisIndexChannel.read(lowBuffer, (long)baseOffsetLow * 8);
 		lowBuffer.position(0);
 		LongBuffer lowBufferL = lowBuffer.asLongBuffer();
 		
-		
-		ByteBuffer highBuffer = ByteBuffer.allocateDirect(nRecordHigh * 8);
+		ByteBuffer highBuffer = ByteBuffer.allocate(nRecordHigh * 8);
 		highBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		aAxisIndexChannel.read(highBuffer, (long)baseOffsetHigh * 8);
 		highBuffer.position(0);
@@ -1052,15 +1072,16 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static void queryAlgorithm1(AverageResult result, boolean doRealQuery, int tSliceLow, int tSliceHigh, int aSliceLow, int aSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
-		int baseOffset = tSliceRecordOffset[tSliceLow];
-		int nRecord = tSliceRecordOffset[tSliceHigh + 1] - tSliceRecordOffset[tSliceLow];
+		int baseOffset = blockOffsetTableAxisT[tSliceLow][aSliceLow];
+		int nRecord = blockOffsetTableAxisT[tSliceHigh][aSliceHigh + 1] - baseOffset;
+		
 		
 		result.addIOCost((long)nRecord * 16);
 		if (!doRealQuery) return;
 		result.tAxisIOCount++; // FIXME: 分开统计？
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocateDirect(nRecord * 16);
+		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
@@ -1140,7 +1161,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int aSliceLow = findSliceA(aMin);
     	int aSliceHigh = findSliceA(aMax);
 
-    	AverageResult result = new AverageResult();
+    	AverageResult result = averageResult.get();
+    	result.reset();
     	
 //    	System.out.println(String.format("block: t[%d %d] a[%d %d]", tSliceLow, tSliceHigh, aSliceLow, aSliceHigh));  
     	try {
@@ -1155,7 +1177,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
     	
-    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [t %d; a %d (%f)]; (%d %d %d %d) => cnt=%d; plan=%d [%f %f]; (t %d %d) (a %d %d)", tMax-tMin, aMax-aMin, (double)(aMax-aMin)/(globalMaxA - globalMinA), tMin, tMax, aMin, aMax, result.cnt, result.curPlan, result.ioCost[0], result.ioCost[1], result.tAxisIOCount, result.tAxisIOBytes, result.aAxisIOCount, result.aAxisIOBytes));
+//    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [t %d; a %d (%f)]; (%d %d %d %d) => cnt=%d; plan=%d [%f %f]; (t %d %d) (a %d %d)", tMax-tMin, aMax-aMin, (double)(aMax-aMin)/(globalMaxA - globalMinA), tMin, tMax, aMin, aMax, result.cnt, result.curPlan, result.ioCost[0], result.ioCost[1], result.tAxisIOCount, result.tAxisIOBytes, result.aAxisIOCount, result.aAxisIOBytes));
     	
     	
     	totalAvgQuery.incrementAndGet();
