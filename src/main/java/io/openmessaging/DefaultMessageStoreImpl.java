@@ -866,7 +866,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     private static final int MAXPLAN = 2;
-    private static final double IOSIZE_FACTOR = 20 * 1024; // SSD速度为 200MB/s 10000IOPS  这样算每个IO大约20KB
+    private static final double IOSIZE_FACTOR = 27400; // SSD速度为 200MB/s 10000IOPS  这样算每个IO大约20KB
     
     private static class AverageResult {
     	long sum;
@@ -957,9 +957,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		int nRecordHigh = blockOffsetTableAxisA[tSliceHigh + 1][aSliceHigh] - baseOffsetHigh;
 
 		
-		
-		result.addIOCost((long)nRecordLow * 8);
-		result.addIOCost((long)nRecordHigh * 8);
+		if (aSliceLow != aSliceHigh) {
+			result.addIOCost((long)nRecordLow * 8);
+			result.addIOCost((long)nRecordHigh * 8);
+		} else {
+			result.addIOCost((long)nRecordLow * 8);
+		}
 		if (!doRealQuery) return;
 		result.aAxisIOCount += 2;
 		result.aAxisIOBytes += (nRecordLow + nRecordHigh) * 8;
@@ -972,7 +975,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		ByteBuffer highBuffer = ByteBuffer.allocate(nRecordHigh * 8);
 		highBuffer.order(ByteOrder.LITTLE_ENDIAN);
-		aAxisIndexChannel.read(highBuffer, (long)baseOffsetHigh * 8);
+		if (aSliceLow != aSliceHigh) {
+			aAxisIndexChannel.read(highBuffer, (long)baseOffsetHigh * 8);
+		} else {
+			highBuffer.put(lowBuffer);
+		}
 		highBuffer.position(0);
 		LongBuffer highBufferL = highBuffer.asLongBuffer();
 		
@@ -1145,6 +1152,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     
     private static AtomicInteger totalAvgQuery = new AtomicInteger();
+    private static AtomicLong totalAvgRecords = new AtomicLong();
 	private static AtomicLong tAxisIOCountTotal = new AtomicLong();
 	private static AtomicLong tAxisIOBytesTotal = new AtomicLong();
 	private static AtomicLong aAxisIOCountTotal = new AtomicLong();
@@ -1196,6 +1204,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	System.out.println("[" + new Date() + "]: shutdown hook");
     	
     	
+    	System.out.println(String.format("totalAvgRecords=%d", totalAvgRecords.get()));
     	System.out.println(String.format("totalAvgQuery=%d", totalAvgQuery.get()));
     	System.out.println(String.format("tAxisIOCountTotal=%d", tAxisIOCountTotal.get()));
     	System.out.println(String.format("tAxisIOBytesTotal=%d", tAxisIOBytesTotal.get()));
