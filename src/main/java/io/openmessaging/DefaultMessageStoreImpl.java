@@ -171,7 +171,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
     private static final int MAXMSG = 2100000000;
     private static final int N_TSLICE = 3000000;
-    private static final int N_ASLICE = 40;
+    private static final int N_ASLICE = 50;
     
     private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
     
@@ -1188,7 +1188,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [t %d; a %d (%f)]; (%d %d %d %d) => cnt=%d; plan=%d [%f %f]; (t %d %d) (a %d %d)", tMax-tMin, aMax-aMin, (double)(aMax-aMin)/(globalMaxA - globalMinA), tMin, tMax, aMin, aMax, result.cnt, result.curPlan, result.ioCost[0], result.ioCost[1], result.tAxisIOCount, result.tAxisIOBytes, result.aAxisIOCount, result.aAxisIOBytes));
     	
     	
+    	
     	totalAvgQuery.incrementAndGet();
+    	totalAvgRecords.addAndGet(result.cnt);
     	tAxisIOCountTotal.addAndGet(result.tAxisIOCount);
     	tAxisIOBytesTotal.addAndGet(result.tAxisIOBytes);
     	aAxisIOCountTotal.addAndGet(result.aAxisIOCount);
