@@ -465,7 +465,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	System.out.println("[" + new Date() + "]: build index for a-axis");
     	
     	tAxisPointData.seek(0);
-    	reserveDiskSpace(aAxisIndexFile, (long)insCount * 8); // FIXME: 是否会造成文件在磁盘上存储不连续？
+    	reserveDiskSpace(aAxisIndexFile, (long)insCount * 8);
     	
     	for (int tSliceId = 0; tSliceId <= tSliceCount; tSliceId += BATCHSIZE) {
     		buildIndexForRangeAxisA(tSliceId, Math.min(tSliceId + BATCHSIZE, tSliceCount) - 1);
@@ -672,6 +672,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static void beginInsertMessage() throws IOException
     {
     	reserveDiskSpace(tAxisPointFile, (long)globalTotalRecords * 16);
+    	reserveDiskSpace(tAxisCompressedPointFile, (long)globalTotalRecords * 10);
     	tAxisPointStream = new BufferedOutputStream(new FileOutputStream(tAxisPointFile));
     	tAxisBodyStream = new BufferedOutputStream(new FileOutputStream(tAxisBodyFile));
     	tAxisCompressedPointStream = new BufferedOutputStream(new FileOutputStream(tAxisCompressedPointFile));
