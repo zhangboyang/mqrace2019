@@ -1,6 +1,5 @@
 package io.openmessaging;
 
-import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -223,16 +222,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	private static void reserveDiskSpace(String fileName, long nBytes) throws IOException
 	{
 		System.out.println("[" + new Date() + "]: " + String.format("reserveDiskSpace: file=%s size=%d", fileName, nBytes));
-		// 理论上，用fallocate()系统调用，可以不用写数据而达到预留磁盘空间的目的，但Java8不支持
-		// 所以这里使用向文件填0的方法
+
 		byte zeros[] = new byte[4096];
 		RandomAccessFile fp = new RandomAccessFile(fileName, "rw");
-		fp.setLength(0);
-		while (nBytes > 0) {
-			int nWrite = (int) Math.min(nBytes, zeros.length);
-			fp.write(zeros, 0, nWrite);
-			nBytes -= nWrite;
-		}
+		// 理论上，用fallocate()系统调用，可以不用写数据而达到预留磁盘空间的目的，但Java8不支持
+		// 所以这里使用向文件填0的方法
+//		fp.setLength(0);
+//		while (nBytes > 0) {
+//			int nWrite = (int) Math.min(nBytes, zeros.length);
+//			fp.write(zeros, 0, nWrite);
+//			nBytes -= nWrite;
+//		}
+		fp.setLength(nBytes);//FIXME
 		fp.close();
 		System.out.println("[" + new Date() + "]: reserveDiskSpace: done");
 	}
@@ -352,8 +353,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final int MAXMSG = 2100000000;
     private static final int N_TSLICE = 3000000;
-    private static final int N_ASLICE = 50;
-    private static final int N_ASLICE2 = 10;
+    private static final int N_ASLICE = 40;
+    private static final int N_ASLICE2 = 12;
     
     
     private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
