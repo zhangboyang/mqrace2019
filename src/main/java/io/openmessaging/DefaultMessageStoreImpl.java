@@ -352,7 +352,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final int MAXMSG = 2100000000;
     private static final int N_TSLICE = 3000000;
-    private static final int N_ASLICE = 40;
+    private static final int N_ASLICE = 50;
     private static final int N_ASLICE2 = 10;
     
     
@@ -373,7 +373,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final long aAxisCompressedPointBaseT[][] = new long[N_TSLICE + 1][N_ASLICE2];
     private static final long aAxisCompressedPointByteOffset[][] = new long[N_TSLICE + 1][N_ASLICE2];
     
-    private static final int blockCountTable[][] = new int[N_TSLICE + 1][N_ASLICE + 1];
     private static final int blockOffsetTableAxisT[][] = new int[N_TSLICE + 1][N_ASLICE + 1];
     private static final int blockOffsetTableAxisA[][] = new int[N_TSLICE + 1][N_ASLICE + 1];
     private static final long blockPrefixSumBaseTable[][] = new long[N_TSLICE][N_ASLICE];
@@ -486,7 +485,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			long prefixSum = 0;
 			
 			for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
-				int msgCnt = blockCountTable[tSliceId][aSliceId];
+				int msgCnt = blockOffsetTableAxisA[tSliceId + 1][aSliceId] - blockOffsetTableAxisA[tSliceId][aSliceId];
 				
 				blockPrefixSumBaseTable[tSliceId][aSliceId] = prefixSum;
 				
@@ -568,8 +567,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		assert offset == tSliceRecordOffset[tSliceId];
     		
     		for (int aSliceId = 0; aSliceId <= N_ASLICE; aSliceId++) {
+    			int t = blockOffsetTableAxisT[tSliceId][aSliceId];
     			blockOffsetTableAxisT[tSliceId][aSliceId] = offset;
-    			offset += blockCountTable[tSliceId][aSliceId];
+    			offset += t;
     		}
     	}
     	assert offset == insCount;
@@ -577,8 +577,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	offset = 0;
     	for (int aSliceId = 0; aSliceId <= N_ASLICE; aSliceId++) {
     		for (int tSliceId = 0; tSliceId <= tSliceCount; tSliceId++) {
+    			int t = blockOffsetTableAxisA[tSliceId][aSliceId];
     			blockOffsetTableAxisA[tSliceId][aSliceId] = offset;
-    			offset += blockCountTable[tSliceId][aSliceId];
+    			offset += t;
     		}
     	}
     	assert offset == insCount;
@@ -757,7 +758,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			while (aSlice2Id < N_ASLICE2 && a >= aSlice2Pivot[aSlice2Id + 1]) aSlice2Id++;
 //			assert aSlice2Id == findSliceA2(a);
 			
-			blockCountTable[tSliceId][aSliceId]++;
+			blockOffsetTableAxisT[tSliceId][aSliceId]++;
+			blockOffsetTableAxisA[tSliceId][aSliceId]++;
 			
 			pointWriteBuffer.putLong(t).putLong(a);
 			
@@ -1399,8 +1401,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		int highOffset = 0;
 		for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
 			
-			int lowCount = blockCountTable[tSliceId][aSliceLow];
-			int highCount = blockCountTable[tSliceId][aSliceHigh];
+			int lowCount = blockOffsetTableAxisA[tSliceId + 1][aSliceLow] - blockOffsetTableAxisA[tSliceId][aSliceLow];
+			int highCount = blockOffsetTableAxisA[tSliceId + 1][aSliceHigh] - blockOffsetTableAxisA[tSliceId][aSliceHigh];
 			
 			long lastPrefixSum = blockPrefixSumBaseTable[tSliceId][aSliceLow];
 			long lowSum = lastPrefixSum;
@@ -1589,14 +1591,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static void queryAZP(AverageResult result, boolean doRealQuery, int aSlice2Id, int tSliceLow, int tSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
-    	int nBytes = (int)(aAxisCompressedPointByteOffset[tSliceHigh + 1][aSlice2Id] - aAxisCompressedPointByteOffset[tSliceLow][aSlice2Id]);
+    	long nBytes = aAxisCompressedPointByteOffset[tSliceHigh + 1][aSlice2Id] - aAxisCompressedPointByteOffset[tSliceLow][aSlice2Id];
 		
     	result.addIOCost(nBytes);
 		if (!doRealQuery) return;
 		result.aAxisIOCount++; // FIXME: 分开统计？
 		result.aAxisIOBytes += nBytes;
 		
-    	ByteBuffer buffer = ByteBuffer.allocate(nBytes).order(ByteOrder.LITTLE_ENDIAN);
+    	ByteBuffer buffer = ByteBuffer.allocate((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
     	aAxisCompressedPointChannel.read(buffer, aAxisCompressedPointByteOffset[tSliceLow][aSlice2Id]);
     	buffer.position(0);
     	
