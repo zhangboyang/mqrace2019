@@ -43,7 +43,7 @@ public class DemoTester {
         int checkTime = 600 * 60 * 1000;
 
         //正确性检测的次数
-        int getMessageTimes = 3000;
+        int getMessageTimes = 30;
         int checkTimes = 30652;
         //发送的线程数量
         int sendTsNum = 10;

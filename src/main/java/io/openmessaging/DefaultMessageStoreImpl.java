@@ -122,6 +122,29 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		}
     	}
     	
+    	public static int getLengthByValue(long value)
+    	{
+    		if ((value & 0x7fL) == value) {
+    			return 1;
+    		} else if ((value & 0x3fffL) == value) {
+    			return 2;
+    		} else if ((value & 0x1fffffL) == value) {
+    			return 3;
+    		} else if ((value & 0xfffffffL) == value) {
+    			return 4;
+    		} else if ((value & 0x7ffffffffL) == value) {
+    			return 5;
+    		} else if ((value & 0x3ffffffffffL) == value) {
+    			return 6;
+    		} else if ((value & 0x1ffffffffffffL) == value) {
+    			return 7;
+    		} else if ((value & 0xffffffffffffffL) == value) {
+    			return 8;
+    		} else {
+    			return 9;
+    		}
+		}
+    	
     	public static long getFromBuffer(ByteBuffer buffer)
     	{
     		assert buffer.order() == ByteOrder.LITTLE_ENDIAN;
@@ -259,9 +282,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    private static final String storagePath = "/alidata1/race2019/data/";
     
     private static final String tAxisPointFile = storagePath + "tAxis.point.data";
-    private static final String tAxisBodyFile = storagePath + "tAxis.body.data";
+    private static final String tAxisBodyFile = storagePath + "tAxis.bodyref.data";
     private static final String tAxisCompressedPointFile = storagePath + "tAxis.zp.data";
-    private static final String aAxisIndexFile = storagePath + "aAxis.index.data";
+    private static final String aAxisIndexFile = storagePath + "aAxis.prefixsum.data";
     
     private static final RandomAccessFile tAxisPointData;
     private static final RandomAccessFile tAxisBodyData;
@@ -320,7 +343,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final int MAXMSG = 2100000000;
     private static final int N_TSLICE = 3000000;
-    private static final int N_ASLICE = 50;
+    private static final int N_ASLICE = 40;
+    private static final int N_ASLICE2 = 10;
     
     
     private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
@@ -333,6 +357,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final long tSliceCompressedPointByteOffset[] = new long[N_TSLICE + 1]; // FIXME: 改成二维？
     
     private static final long aSlicePivot[] = new long[N_ASLICE + 1];
+    
+    private static final long aSlice2Pivot[] = new long[N_ASLICE2 + 1];
+    private static final long aAxisCompressedPointBaseT[][] = new long[N_TSLICE + 1][N_ASLICE2];
+    private static final long aAxisCompressedPointOffset[][] = new long[N_TSLICE + 1][N_ASLICE2];
     
     private static final int blockCountTable[][] = new int[N_TSLICE + 1][N_ASLICE + 1];
     private static final int blockOffsetTableAxisT[][] = new int[N_TSLICE + 1][N_ASLICE + 1];
@@ -348,9 +376,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final long zpByteOffset[] = new long[MAXTHREAD];
     private static final int zpRecordOffset[] = new int[MAXTHREAD];
     private static final long zpLastT[] = new long[MAXTHREAD];
-    private static final long zpLastByteOffset[] = new long[MAXTHREAD];
-    private static final int zpLastRecordOffset[] = new int[MAXTHREAD];
-    private static final long zpLastLastT[] = new long[MAXTHREAD];
 
     
     private static int findSliceT(long tValue)
@@ -381,7 +406,20 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		assert aSlicePivot[l] <= aValue && aValue < aSlicePivot[l + 1];
 		return l;
     }
-    
+    private static int findSliceA2(long aValue)
+    {
+		int l = 0, r = N_ASLICE2;
+		while (r - l > 1) {
+			int m = (l + r) / 2;
+			if (aValue >= aSlice2Pivot[m]) {
+				l = m;
+			} else {
+				r = m;
+			}
+		}
+		assert aSlice2Pivot[l] <= aValue && aValue < aSlice2Pivot[l + 1];
+		return l;
+    }
     
     
     
@@ -638,10 +676,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		// 计算每小块内记录数量，并写t轴索引
 		int aSliceId = 0;
-		long tValueBase = tSlicePivot[tSliceId];
+		long lastT = tSlicePivot[tSliceId];
 		ByteBuffer compressedPointBuffer = ByteBuffer.allocate(18 * nWrite);
 		compressedPointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		
+		int aSlice2Id = 0;
+		System.arraycopy(aAxisCompressedPointBaseT[tSliceId], 0, aAxisCompressedPointBaseT[tSliceId + 1], 0, N_ASLICE2);
 		for (int i = 0; i < nWrite; i++) {
 			Message msg = writeBuffer[i];
 			long a = msg.getA();
@@ -649,13 +689,21 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			
 			while (aSliceId < N_ASLICE && a >= aSlicePivot[aSliceId + 1]) aSliceId++;
 //			assert aSliceId == findSliceA(a);
+			while (aSlice2Id < N_ASLICE2 && a >= aSlice2Pivot[aSlice2Id + 1]) aSlice2Id++;
+//			assert aSlice2Id == findSliceA2(a);
 			
 			blockCountTable[tSliceId][aSliceId]++;
 			
 			pointWriteBuffer.putLong(t).putLong(a);
 			
-			ValueCompressor.putToBuffer(compressedPointBuffer, t - tValueBase);
+			long deltaT = t - lastT;
+			ValueCompressor.putToBuffer(compressedPointBuffer, deltaT);
 			ValueCompressor.putToBuffer(compressedPointBuffer, a);
+			lastT = t;
+			
+			long deltaT2 = t - aAxisCompressedPointBaseT[tSliceId + 1][aSlice2Id];
+			aAxisCompressedPointOffset[tSliceId][aSlice2Id] += ValueCompressor.getLengthByValue(deltaT2) + ValueCompressor.getLengthByValue(a);
+			aAxisCompressedPointBaseT[tSliceId + 1][aSlice2Id] = t;
 		}
 		
 		shiftWriteBuffer(nWrite);
@@ -836,11 +884,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	for (int i = 0; i <= N_ASLICE; i++) {
     		System.out.println(String.format("aSlicePivot[%d]=%d", i, aSlicePivot[i]));
     	}
+    	
+    	// 计算2号a索引的分割点
+    	for (int i = 0; i < N_ASLICE2; i++) {
+    		aSlice2Pivot[i] = aSamples.get(aSamples.size() / N_ASLICE2 * i).longValue();
+    	}
+    	aSlice2Pivot[0] = globalMinA;
+    	aSlice2Pivot[N_ASLICE2] = Long.MAX_VALUE;
+    	for (int i = 0; i <= N_ASLICE2; i++) {
+    		System.out.println(String.format("aSlice2Pivot[%d]=%d", i, aSlice2Pivot[i]));
+    	}
     }
 
-    
-    
-    
     
     
     
@@ -1406,9 +1461,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
 			int nRecord = tSliceRecordCount[tSliceId];
-			long tValueBase = tSlicePivot[tSliceId];
+			long t = tSlicePivot[tSliceId];
 			for (int i = 0; i < nRecord; i++) {
-				long t = tValueBase + ValueCompressor.getFromBuffer(pointBuffer);
+				t += ValueCompressor.getFromBuffer(pointBuffer);
 				long a = ValueCompressor.getFromBuffer(pointBuffer);
 //				System.out.println("t=" + t + " a=" + a);
 		
