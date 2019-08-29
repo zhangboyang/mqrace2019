@@ -43,7 +43,7 @@ public class DemoTester {
         int checkTime = 600 * 60 * 1000;
 
         //正确性检测的次数
-        int getMessageTimes = 30;
+        int getMessageTimes = 3000;
         int checkTimes = 30652;
         //发送的线程数量
         int sendTsNum = 10;
@@ -267,6 +267,10 @@ public class DemoTester {
 	                            msg = iter.next();
 	                            if (msg.getA() != genAfromT(msg.getT()) || msg.getT() != index1
 	                                    || ByteBuffer.wrap(msg.getBody()).getLong() != index1) {
+		                        	System.out.println("T="+ msg.getT());
+		                        	System.out.println("A="+ msg.getA());
+		                        	System.out.println("index1="+ index1);
+		                        	System.out.println("body="+ByteBuffer.wrap(msg.getBody()).getLong());
 	                            	System.out.println("ERROR3");
 	                                checkError();
 	                            }
