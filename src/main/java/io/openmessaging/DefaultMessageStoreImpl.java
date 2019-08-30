@@ -365,7 +365,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int N_TSLICE = 3000000;
     private static final int N_ASLICE = 40;
     
-    private static final int N_ASLICE2 = 9;
+    private static final int N_ASLICE2 = 8;
     private static final int N_ASLICE3 = N_ASLICE2 + 1;
     
     private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
@@ -1466,7 +1466,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOCount++;
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
+		ByteBuffer pointBuffer = ByteBuffer.allocateDirect(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
@@ -1510,13 +1510,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOCount += 2;
 		result.aAxisIOBytes += (nRecordLow + nRecordHigh) * 8;
 		
-		ByteBuffer lowBuffer = ByteBuffer.allocate(nRecordLow * 8);
+		ByteBuffer lowBuffer = ByteBuffer.allocateDirect(nRecordLow * 8);
 		lowBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		aAxisIndexChannel.read(lowBuffer, (long)baseOffsetLow * 8);
 		lowBuffer.position(0);
 		LongBuffer lowBufferL = lowBuffer.asLongBuffer();
 		
-		ByteBuffer highBuffer = ByteBuffer.allocate(nRecordHigh * 8);
+		ByteBuffer highBuffer = ByteBuffer.allocateDirect(nRecordHigh * 8);
 		highBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		if (aSliceLow != aSliceHigh) {
 			aAxisIndexChannel.read(highBuffer, (long)baseOffsetHigh * 8);
@@ -1649,7 +1649,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOCount++; // FIXME: 分开统计？
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
+		ByteBuffer pointBuffer = ByteBuffer.allocateDirect(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
@@ -1690,7 +1690,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOBytes += nBytes;
 		
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocate((int)nBytes);
+		ByteBuffer pointBuffer = ByteBuffer.allocateDirect((int)nBytes);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisCompressedPointChannel.read(pointBuffer, baseOffset);
 		pointBuffer.position(0);
@@ -1726,7 +1726,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOCount++; // FIXME: 分开统计？
 		result.aAxisIOBytes += nBytes;
 		
-    	ByteBuffer buffer = ByteBuffer.allocate((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
+    	ByteBuffer buffer = ByteBuffer.allocateDirect((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
     	aAxisCompressedPoint2Channel.read(buffer, aAxisCompressedPoint2ByteOffset[tSliceLow][aSlice2Id]);
     	buffer.position(0);
     	
@@ -1776,7 +1776,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOCount++; // FIXME: 分开统计？
 		result.aAxisIOBytes += nBytes;
 		
-    	ByteBuffer buffer = ByteBuffer.allocate((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
+    	ByteBuffer buffer = ByteBuffer.allocateDirect((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
     	aAxisCompressedPoint3Channel.read(buffer, aAxisCompressedPoint3ByteOffset[tSliceLow][aSlice3Id]);
     	buffer.position(0);
     	
