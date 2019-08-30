@@ -354,7 +354,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int MAXMSG = 2100000000;
     private static final int N_TSLICE = 3000000;
     private static final int N_ASLICE = 40;
-    private static final int N_ASLICE2 = 6;
+    private static final int N_ASLICE2 = 7;
     
     
     private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
@@ -1137,6 +1137,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     @Override
     public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {
 
+    	boolean firstFlag = false;
+    	
     	if (state == 1) {
     		synchronized (stateLock) {
     			if (state == 1) {
@@ -1162,6 +1164,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				
     				System.gc();
 
+    				firstFlag = true;
+    				
     				state = 2;
     			}
     		}
@@ -1232,6 +1236,22 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
 //		System.out.println("[" + new Date() + "]: " + String.format("queryData: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.size()));
 
+		
+		
+		if (firstFlag) {
+			// 预热JVM
+			System.out.println("[" + new Date() + "]: prepare JVM for stage3 started");
+			for (forcePlanId = 0; forcePlanId < MAXPLAN; forcePlanId++) {
+				for (int i = 0; i < 10000; i++) {
+					getAvgValue(aMin, aMax, tMin, tMax);
+				}
+			}
+			forcePlanId = -1;
+			resetQueryStatistics();
+			System.out.println("[" + new Date() + "]: prepare JVM for stage3 finished");
+		}
+		
+		
     	return result;
     }
 
@@ -1248,7 +1268,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
-    
+    private static int forcePlanId = -1; // 预热时候用
     
     
     private static final AverageResult queryTLD[] = new AverageResult[MAXTHREAD];
@@ -1659,6 +1679,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     ////// 查询计划器：预估不同查询算法IO代价，选择IO代价最小的算法Id号返回
     private static int queryPlanner(AverageResult result, boolean doRealQuery) throws IOException
     {
+    	if (forcePlanId >= 0) {
+    		return forcePlanId;
+    	}
+    	
     	for (int planId = 0; planId < MAXPLAN; planId++) {
     		queryExecutor(result, planId, false);
     	}
@@ -1681,15 +1705,30 @@ public class DefaultMessageStoreImpl extends MessageStore {
     ////////////////////////////////////////////////////////////////////////////////////////
 
     
-    private static AtomicInteger totalAvgQuery = new AtomicInteger();
-    private static AtomicLong totalAvgRecords = new AtomicLong();
-	private static AtomicLong tAxisIOCountTotal = new AtomicLong();
-	private static AtomicLong tAxisIOBytesTotal = new AtomicLong();
-	private static AtomicLong aAxisIOCountTotal = new AtomicLong();
-	private static AtomicLong aAxisIOBytesTotal = new AtomicLong();
-	private static DoubleAdder totalIOCost = new DoubleAdder();
-	private static AtomicIntegerArray planCount = new AtomicIntegerArray(MAXPLAN);
+    private static final AtomicInteger totalAvgQuery = new AtomicInteger();
+    private static final AtomicLong totalAvgRecords = new AtomicLong();
+	private static final AtomicLong tAxisIOCountTotal = new AtomicLong();
+	private static final AtomicLong tAxisIOBytesTotal = new AtomicLong();
+	private static final AtomicLong aAxisIOCountTotal = new AtomicLong();
+	private static final AtomicLong aAxisIOBytesTotal = new AtomicLong();
+	private static final DoubleAdder totalIOCost = new DoubleAdder();
+	private static final AtomicIntegerArray planCount = new AtomicIntegerArray(MAXPLAN);
 	
+	static void resetQueryStatistics()
+	{
+		queryThreadCount.set(0);
+		
+	    totalAvgQuery.set(0);
+	    totalAvgRecords.set(0);
+		tAxisIOCountTotal.set(0);
+		tAxisIOBytesTotal.set(0);
+		aAxisIOCountTotal.set(0);
+		aAxisIOBytesTotal.set(0);
+		totalIOCost.reset();
+		for (int i = 0; i < MAXPLAN; i++) {
+			planCount.set(i, 0);
+		}
+	}
 	
     @Override
     public long getAvgValue(long aMin, long aMax, long tMin, long tMax) {
