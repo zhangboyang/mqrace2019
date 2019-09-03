@@ -36,15 +36,15 @@ public class DemoTester {
     public static void main(String args[]) throws Exception {
         //评测相关配置
         //发送阶段的发送数量，也即发送阶段必须要在规定时间内把这些消息发送完毕方可
-        int msgNum = 13340000;
+        int msgNum = 133400000;
         //发送阶段的最大持续时间，也即在该时间内，如果消息依然没有发送完毕，则退出评测
         int sendTime = 600 * 60 * 1000;
         //查询阶段的最大持续时间，也即在该时间内，如果消息依然没有消费完毕，则退出评测
         int checkTime = 600 * 60 * 1000;
 
         //正确性检测的次数
-        int getMessageTimes = 30;
-        int checkTimes = 30652;
+        int getMessageTimes = 300;
+        int checkTimes = 306520000;
         //发送的线程数量
         int sendTsNum = 10;
         //查询的线程数量
