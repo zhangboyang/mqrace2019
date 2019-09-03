@@ -410,7 +410,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final My2DIntArray blockOffsetTableAxisT = new My2DIntArray(N_TSLICE + 1, N_ASLICE + 1);
     private static final My2DIntArray blockOffsetTableAxisA = new My2DIntArray(N_TSLICE + 1, N_ASLICE + 1);
-    private static final My2DLongArray blockPrefixSumBaseTable = new My2DLongArray(N_TSLICE, N_ASLICE);
+//    private static final My2DLongArray blockPrefixSumBaseTable = new My2DLongArray(N_TSLICE, N_ASLICE);
     
     private static int insCount = 0;
     
@@ -565,17 +565,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			long prefixSum = 0;
 			
 			for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
-				int msgCnt = blockOffsetTableAxisA.get(tSliceId + 1, aSliceId) - blockOffsetTableAxisA.get(tSliceId, aSliceId);
-				
-				blockPrefixSumBaseTable.set(tSliceId, aSliceId, prefixSum);
+				int msgCnt = blockOffsetTableAxisA.get(tSliceId + 1, aSliceId) - blockOffsetTableAxisA.get(tSliceId, aSliceId) - 1;
 				
 				int putBase = bufferBase[aSliceId] + blockOffsetTableAxisA.get(tSliceId, aSliceId) - blockOffsetTableAxisA.get(tSliceFrom, aSliceId);
+
+				// 存储prefixSumBase
+				indexWriteBufferL.put(putBase + msgCnt, prefixSum);
+				
+				// 存储各个prefixSum
 				for (int i = putBase; i < putBase + msgCnt; i++) {
-					
 					
 					long curA = indexReadBufferL.get((msgPtr++ * 2) + 1);
 					prefixSum += curA;
-					
 					
 					indexWriteBufferL.put(i, prefixSum);
 				}
@@ -627,12 +628,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	for (int aSliceId = 0; aSliceId <= N_ASLICE; aSliceId++) {
     		for (int tSliceId = 0; tSliceId <= tSliceCount; tSliceId++) {
     			int t = blockOffsetTableAxisA.get(tSliceId, aSliceId);
+    			if (aSliceId < N_ASLICE && tSliceId < tSliceCount) {
+    				t++;  // 每个块第一个记录是该块的prefixSumBase
+    			}
     			blockOffsetTableAxisA.set(tSliceId, aSliceId, offset);
     			offset += t;
     		}
     	}
-    	assert offset == insCount;
-    	
+    	assert offset == insCount + N_ASLICE * tSliceCount;
     	
     	
     	
@@ -1592,17 +1595,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		int highOffset = 0;
 		for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
 			
-			int lowCount = blockOffsetTableAxisA.get(tSliceId + 1, aSliceLow) - blockOffsetTableAxisA.get(tSliceId, aSliceLow);
-			int highCount = blockOffsetTableAxisA.get(tSliceId + 1, aSliceHigh) - blockOffsetTableAxisA.get(tSliceId, aSliceHigh);
+			int lowCount = blockOffsetTableAxisA.get(tSliceId + 1, aSliceLow) - blockOffsetTableAxisA.get(tSliceId, aSliceLow) - 1;
+			int highCount = blockOffsetTableAxisA.get(tSliceId + 1, aSliceHigh) - blockOffsetTableAxisA.get(tSliceId, aSliceHigh) - 1;
 			
-			long lastPrefixSum = blockPrefixSumBaseTable.get(tSliceId, aSliceLow);
+			long lastPrefixSum = lowBufferL.get(lowOffset + lowCount);
 			long lowSum = lastPrefixSum;
 			int lowPtr = -1;
 			for (int i = lowOffset; i < lowOffset + lowCount; i++) {
 				long prefixSum = lowBufferL.get(i);
 				long a = prefixSum - lastPrefixSum;
 				lastPrefixSum = prefixSum;
-//				System.out.println(String.format("low t=%d a=%d", lowBufferL.get(i * 2), a));
+//				System.out.println(String.format("low a=%d", a));
 				if (a < aMin) {
 					lowSum = prefixSum;
 					lowPtr = i - lowOffset;
@@ -1612,13 +1615,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			}
 			lowPtr++;
 			
-			lastPrefixSum = blockPrefixSumBaseTable.get(tSliceId, aSliceHigh);
+			lastPrefixSum = highBufferL.get(highOffset + highCount);
 			long highSum = lastPrefixSum;
 			int highPtr = -1;
 			for (int i = highOffset; i < highOffset + highCount; i++) {
 				long prefixSum = highBufferL.get(i);
 				long a = prefixSum - lastPrefixSum;
-//				System.out.println(String.format("high t=%d a=%d", highBufferL.get(i * 2), a));
 				lastPrefixSum = prefixSum;
 				if (a <= aMax) {
 					highSum = highBufferL.get(i);
@@ -1641,16 +1643,16 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			result.cnt += cnt;
 		
 //			AverageResult referenceResult = new AverageResult();
-//			queryAverageAxisT(referenceResult, tSliceId, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
-////			System.out.println(String.format("tSliceId=%d ; aSliceLow=%d aSliceHigh=%d ; lowPtr=%d  highPtr=%d", tSliceId, aSliceLow, aSliceHigh, lowPtr, highPtr));
-////			System.out.println(String.format("cnt=%d sum=%d", cnt, sum));
-////			System.out.println(String.format("ref: cnt=%d sum=%d", referenceResult.cnt, referenceResult.sum));
+//			queryAverageSliceT(referenceResult, doRealQuery, tSliceId, aSliceLow, aSliceHigh, tMin, tMax, aMin, aMax);
+//			System.out.println(String.format("tSliceId=%d ; aSliceLow=%d aSliceHigh=%d ; lowPtr=%d  highPtr=%d", tSliceId, aSliceLow, aSliceHigh, lowPtr, highPtr));
+//			System.out.println(String.format("cnt=%d sum=%d", cnt, sum));
+//			System.out.println(String.format("ref: cnt=%d sum=%d", referenceResult.cnt, referenceResult.sum));
 //			assert cnt == referenceResult.cnt;
 //			assert sum == referenceResult.sum;
 
 			
-			lowOffset += lowCount;
-			highOffset += highCount;
+			lowOffset += lowCount + 1;
+			highOffset += highCount + 1;
 		}
 		
 		assert lowOffset == nRecordLow;
