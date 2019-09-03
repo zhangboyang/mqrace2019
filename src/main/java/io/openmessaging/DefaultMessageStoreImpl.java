@@ -30,21 +30,25 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	
 	private static class MyBufferedFile {
 		private static final int UNIT = 1000*1000*1000;
-		private static final ByteBuffer buffer1 = ByteBuffer.allocate((int)(UNIT*1.5));
+		private static final ByteBuffer buffer1 = ByteBuffer.allocate((int)(UNIT*2.0));
 		private static long offset1 = 1*UNIT;
 		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.5));
 		private static long offset2 = 10*UNIT;
 		
 		static {
-			System.out.println("MyBufferedFile INIT!");
+			System.out.println("[" + new Date() + "]: MyBufferedFile INIT!");
 		}
 		
 		static void init() throws IOException
 		{
+			System.out.println("[" + new Date() + "]: MyBufferedFile load buffer1 started");
 			tAxisCompressedPointData.seek(offset1);
 			tAxisCompressedPointData.read(buffer1.array());
 			
+			System.out.println("[" + new Date() + "]: MyBufferedFile load buffer2 started");
 			tAxisCompressedPointChannel.read(buffer2, offset2);
+			
+			System.out.println("[" + new Date() + "]: MyBufferedFile load done");
 		}
 		
 		static boolean hit1(long position, int size)
@@ -443,7 +447,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int tSliceRecordCount[] = new int[N_TSLICE + 1];
     private static final int tSliceRecordOffset[] = new int[N_TSLICE + 1];
     
-    private static final long tSliceCompressedPointByteOffset[] = new long[N_TSLICE + 1]; // FIXME: 改成二维？
+    private static final long tSliceCompressedPointByteOffset[] = new long[N_TSLICE + 1];
     
     private static final long aSlicePivot[] = new long[N_ASLICE + 1];
     
@@ -455,8 +459,20 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final My2DLongArray aAxisCompressedPoint3BaseT = new My2DLongArray(N_TSLICE + 1, N_ASLICE3);
     private static final My2DLongArray aAxisCompressedPoint3ByteOffset = new My2DLongArray(N_TSLICE + 1, N_ASLICE3);
     
-    private static final My2DIntArray blockOffsetTableAxisT = new My2DIntArray(N_TSLICE + 1, N_ASLICE + 1);
-    private static final My2DIntArray blockOffsetTableAxisA = new My2DIntArray(N_TSLICE + 1, N_ASLICE + 1);
+    private static final My2DIntArray blockOffsetTableCountPrefixSum = new My2DIntArray(N_TSLICE + 2, N_ASLICE + 2);
+    private static void incBlockOffsetTableCountPrefixSum(int x, int y) { blockOffsetTableCountPrefixSum.inc(x + 1, y + 1); }
+    private static int getBlockOffsetTableCountPrefixSum(int x, int y) { return blockOffsetTableCountPrefixSum.get(x + 1, y + 1); }
+    private static int blockOffsetTableAxisT(int x, int y)
+    {
+    	return getBlockOffsetTableCountPrefixSum(x - 1, N_ASLICE) +
+    			(getBlockOffsetTableCountPrefixSum(x, y - 1) - getBlockOffsetTableCountPrefixSum(x - 1, y - 1));
+    }
+    private static int blockOffsetTableAxisA(int x, int y)
+    {
+    	return getBlockOffsetTableCountPrefixSum(tSliceCount, y - 1) +
+    			(getBlockOffsetTableCountPrefixSum(x - 1, y) - getBlockOffsetTableCountPrefixSum(x - 1, y - 1)) +
+    			(y * (tSliceCount + 1) + x);
+    }
     
     private static int insCount = 0;
     
@@ -602,7 +618,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		int sliceRecordCount[] = new int[N_ASLICE];
 		int bufferBase[] = new int[N_ASLICE];
 		for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
-			sliceRecordCount[aSliceId] = blockOffsetTableAxisA.get(tSliceTo + 1, aSliceId) - blockOffsetTableAxisA.get(tSliceFrom, aSliceId);
+			sliceRecordCount[aSliceId] = blockOffsetTableAxisA(tSliceTo + 1, aSliceId) - blockOffsetTableAxisA(tSliceFrom, aSliceId);
 			if (aSliceId > 0) {
 				bufferBase[aSliceId] = bufferBase[aSliceId - 1] + sliceRecordCount[aSliceId - 1];
 			}
@@ -614,9 +630,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			long prefixSum = 0;
 			
 			for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
-				int msgCnt = blockOffsetTableAxisA.get(tSliceId + 1, aSliceId) - blockOffsetTableAxisA.get(tSliceId, aSliceId) - 1;
+				int msgCnt = blockOffsetTableAxisA(tSliceId + 1, aSliceId) - blockOffsetTableAxisA(tSliceId, aSliceId) - 1;
 				
-				int putBase = bufferBase[aSliceId] + blockOffsetTableAxisA.get(tSliceId, aSliceId) - blockOffsetTableAxisA.get(tSliceFrom, aSliceId);
+				int putBase = bufferBase[aSliceId] + blockOffsetTableAxisA(tSliceId, aSliceId) - blockOffsetTableAxisA(tSliceFrom, aSliceId);
 
 				// 存储prefixSumBase
 				indexWriteBufferL.put(putBase + msgCnt, prefixSum);
@@ -634,7 +650,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		assert msgPtr == nRecord;
 		
 		for (int aSliceId = 0; aSliceId < N_ASLICE; aSliceId++) {
-			aAxisIndexData.seek((long)blockOffsetTableAxisA.get(tSliceFrom, aSliceId) * 8);
+			aAxisIndexData.seek((long)blockOffsetTableAxisA(tSliceFrom, aSliceId) * 8);
 			aAxisIndexData.write(indexWriteBuffer.array(), bufferBase[aSliceId] * 8, sliceRecordCount[aSliceId] * 8);
 		}
     }
@@ -658,35 +674,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static void buildOffsetTable()
     {
-    	int offset;
     	
-    	
-    	offset = 0;
-    	for (int tSliceId = 0; tSliceId <= tSliceCount; tSliceId++) {
-    		assert offset == tSliceRecordOffset[tSliceId];
-    		
-    		for (int aSliceId = 0; aSliceId <= N_ASLICE; aSliceId++) {
-    			int t = blockOffsetTableAxisT.get(tSliceId, aSliceId);
-    			blockOffsetTableAxisT.set(tSliceId, aSliceId, offset);
-    			offset += t;
+    	for (int x = 1; x <= tSliceCount + 1; x++) {
+    		int s = 0;
+    		for (int y = 1; y <= N_ASLICE + 1; y++) {
+    			s += blockOffsetTableCountPrefixSum.get(x, y);
+    			blockOffsetTableCountPrefixSum.set(x, y, blockOffsetTableCountPrefixSum.get(x - 1, y) + s);
     		}
     	}
-    	assert offset == insCount;
-    	
-    	offset = 0;
-    	for (int aSliceId = 0; aSliceId <= N_ASLICE; aSliceId++) {
-    		for (int tSliceId = 0; tSliceId <= tSliceCount; tSliceId++) {
-    			int t = blockOffsetTableAxisA.get(tSliceId, aSliceId);
-    			if (aSliceId < N_ASLICE && tSliceId < tSliceCount) {
-    				t++;  // 每个块第一个记录是该块的prefixSumBase
-    			}
-    			blockOffsetTableAxisA.set(tSliceId, aSliceId, offset);
-    			offset += t;
-    		}
-    	}
-    	assert offset == insCount + N_ASLICE * tSliceCount;
-    	
-    	
     	
     	// 造a轴压缩点偏移表
     	for (int aSlice2Id = 0; aSlice2Id < N_ASLICE2; aSlice2Id++) {
@@ -920,8 +915,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			
 			while (aSliceId < N_ASLICE && a >= aSlicePivot[aSliceId + 1]) aSliceId++;
 			
-			blockOffsetTableAxisT.inc(tSliceId, aSliceId);
-			blockOffsetTableAxisA.inc(tSliceId, aSliceId);
+			incBlockOffsetTableCountPrefixSum(tSliceId, aSliceId);
 			
 			pointWriteBuffer.putLong(t).putLong(a);
 			
@@ -1462,7 +1456,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
 		
-		Collections.sort(result, tComparator); // FIXME: 用合并排序提高性能
+		Collections.sort(result, tComparator);
 
 //		System.out.println("[" + new Date() + "]: " + String.format("queryData: [%d %d] (%d %d %d %d) => %d", tMax-tMin, aMax-aMin, tMin, tMax, aMin, aMax, result.size()));
 
@@ -1547,6 +1541,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	long aAxisIOCount;
     	long aAxisIOBytes;
     	
+    	int nHit;
+    	
     	//////////////
     	
     	int curPlan;
@@ -1570,6 +1566,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		tAxisIOBytes = 0;
     		aAxisIOCount = 0;
     		aAxisIOBytes = 0;
+    		
+    		nHit = 0;
     	}
     }
     
@@ -1582,8 +1580,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static void queryAverageSliceT(AverageResult result, boolean doRealQuery, int tSliceId, int aSliceLow, int aSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
-		int baseOffset = blockOffsetTableAxisT.get(tSliceId, aSliceLow);
-		int nRecord = blockOffsetTableAxisT.get(tSliceId, aSliceHigh + 1) - baseOffset;
+		int baseOffset = blockOffsetTableAxisT(tSliceId, aSliceLow);
+		int nRecord = blockOffsetTableAxisT(tSliceId, aSliceHigh + 1) - baseOffset;
 		
 		result.addIOCost((long)nRecord * 16);
 		if (!doRealQuery) return;
@@ -1616,12 +1614,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 //    	if (true) return;
 //    	System.out.println(String.format("(%d %d %d %d)", tMin, tMax, aMin, aMax));
 
-    	int baseOffsetLow = blockOffsetTableAxisA.get(tSliceLow, aSliceLow);
-		int nRecordLow = blockOffsetTableAxisA.get(tSliceHigh + 1, aSliceLow) - baseOffsetLow;
+    	int baseOffsetLow = blockOffsetTableAxisA(tSliceLow, aSliceLow);
+		int nRecordLow = blockOffsetTableAxisA(tSliceHigh + 1, aSliceLow) - baseOffsetLow;
 
 		
-		int baseOffsetHigh = blockOffsetTableAxisA.get(tSliceLow, aSliceHigh);
-		int nRecordHigh = blockOffsetTableAxisA.get(tSliceHigh + 1, aSliceHigh) - baseOffsetHigh;
+		int baseOffsetHigh = blockOffsetTableAxisA(tSliceLow, aSliceHigh);
+		int nRecordHigh = blockOffsetTableAxisA(tSliceHigh + 1, aSliceHigh) - baseOffsetHigh;
 
 		
 		if (aSliceLow != aSliceHigh) {
@@ -1654,8 +1652,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		int highOffset = 0;
 		for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
 			
-			int lowCount = blockOffsetTableAxisA.get(tSliceId + 1, aSliceLow) - blockOffsetTableAxisA.get(tSliceId, aSliceLow) - 1;
-			int highCount = blockOffsetTableAxisA.get(tSliceId + 1, aSliceHigh) - blockOffsetTableAxisA.get(tSliceId, aSliceHigh) - 1;
+			int lowCount = blockOffsetTableAxisA(tSliceId + 1, aSliceLow) - blockOffsetTableAxisA(tSliceId, aSliceLow) - 1;
+			int highCount = blockOffsetTableAxisA(tSliceId + 1, aSliceHigh) - blockOffsetTableAxisA(tSliceId, aSliceHigh) - 1;
 			
 			long lastPrefixSum = lowBufferL.get(lowOffset + lowCount);
 			long lowSum = lastPrefixSum;
@@ -1688,8 +1686,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			}
 			
 			
-			int globalLowPtr = blockOffsetTableAxisT.get(tSliceId, aSliceLow) + lowPtr;
-			int globalHighPtr = blockOffsetTableAxisT.get(tSliceId, aSliceHigh) + highPtr;
+			int globalLowPtr = blockOffsetTableAxisT(tSliceId, aSliceLow) + lowPtr;
+			int globalHighPtr = blockOffsetTableAxisT(tSliceId, aSliceHigh) + highPtr;
 			
 			long sum = 0;
 			int cnt = 0;
@@ -1763,8 +1761,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int aSliceLow = result.aSliceLow;
     	int aSliceHigh = result.aSliceHigh;
     	
-		int baseOffset = blockOffsetTableAxisT.get(tSliceLow, aSliceLow);
-		int nRecord = blockOffsetTableAxisT.get(tSliceHigh, aSliceHigh + 1) - baseOffset;
+		int baseOffset = blockOffsetTableAxisT(tSliceLow, aSliceLow);
+		int nRecord = blockOffsetTableAxisT(tSliceHigh, aSliceHigh + 1) - baseOffset;
 		
 		
 		result.addIOCost((long)nRecord * 16);
@@ -1812,8 +1810,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			if (!doRealQuery) return;
 			result.tAxisIOCount++; // FIXME: 分开统计？
 			result.tAxisIOBytes += nBytes;
+		} else {
+			if (!doRealQuery) return;
+			result.nHit++;
 		}
-		if (!doRealQuery) return;
 		
 		
 		
@@ -1990,6 +1990,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	private static final AtomicLong aAxisIOBytesTotal = new AtomicLong();
 	private static final DoubleAdder totalIOCost = new DoubleAdder();
 	private static final AtomicIntegerArray planCount = new AtomicIntegerArray(MAXPLAN);
+	private static final AtomicInteger totalCacheHit = new AtomicInteger();
 	
 	private static void resetQueryStatistics()
 	{
@@ -2052,6 +2053,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	aAxisIOBytesTotal.addAndGet(result.aAxisIOBytes);
     	planCount.incrementAndGet(result.curPlan);
     	totalIOCost.add(result.ioCost[result.curPlan]);
+    	totalCacheHit.addAndGet(result.nHit);
     	
     	return result.cnt == 0 ? 0 : result.sum / result.cnt;
     }
@@ -2067,7 +2069,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	System.out.println(String.format("tAxisIOBytesTotal=%d", tAxisIOBytesTotal.get()));
     	System.out.println(String.format("aAxisIOCountTotal=%d", aAxisIOCountTotal.get()));
     	System.out.println(String.format("aAxisIOBytesTotal=%d", aAxisIOBytesTotal.get()));
-    	
+    	System.out.println(String.format("totalCacheHit=%d", totalCacheHit.get()));
     	for (int i = 0; i < MAXPLAN; i++) {
     		System.out.println(String.format("planCount[%d]=%d", i, planCount.get(i)));
     	}
