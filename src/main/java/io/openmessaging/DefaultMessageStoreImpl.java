@@ -5,6 +5,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.LongBuffer;
@@ -640,6 +641,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		buildIndexForRangeAxisA(tSliceId, Math.min(tSliceId + BATCHSIZE, tSliceCount) - 1);
     	}
     	
+    	System.out.println(String.format("aAxisCompressedPoint2Bytes=%d  (%f b/rec)", aAxisCompressedPoint2Data.length(), (double)aAxisCompressedPoint2Data.length() / aAxisCompressedPoint2Offset.get(tSliceCount, N_ASLICE2 - 1)));
+    	System.out.println(String.format("aAxisCompressedPoint3Bytes=%d  (%f b/rec)", aAxisCompressedPoint3Data.length(), (double)aAxisCompressedPoint3Data.length() / aAxisCompressedPoint3Offset.get(tSliceCount, N_ASLICE3 - 1)));
     	System.out.println("[" + new Date() + "]: a-axis index finished");
     	
     	indexReadBuffer = null;
@@ -965,6 +968,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	writeBuffer2 = null;
     	
     	System.out.println("tSliceCount=" + tSliceCount);
+    	System.out.println(String.format("tSliceCompressedPointBytes=%d  (%f b/rec)", tSliceCompressedPointByteOffset[tSliceCount], (double)tSliceCompressedPointByteOffset[tSliceCount]/insCount));
     	
     	tAxisPointStream.close();
     	tAxisPointStream = null;
@@ -1198,7 +1202,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			pd.bufferedBodyOutputStream.close();
 			pd.bufferedBodyOutputStream = null;
 			
-			System.out.println(String.format("thread %d: %d", i, pd.outputCount));
+			System.out.println(String.format("thread %d: %d (%d bytes, %f b/rec)", i, pd.outputCount, pd.outputBytes, (double)pd.outputBytes / pd.outputCount));
 			globalTotalRecords += pd.outputCount;
 		}
 		System.out.println(String.format("total: %d", globalTotalRecords));
@@ -1360,18 +1364,25 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
 	    		for (int recordId = 0; recordId < nRecord; recordId++) {
 					
-	    			t += ValueCompressor.getFromBuffer(zpBuffer);
-					long a = ValueCompressor.getFromBuffer(zpBuffer);
-					
-		    		
-					if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
-						byte body[] = new byte[34];
-						bodyBuffer.position(recordId * 34);
-						bodyBuffer.get(body);
-						result.add(new Message(a, t, body));
-//						System.out.println(String.format("tLow=%d tHigh=%d nBytes=%d nRecord=%d tid=%d rid=%d t=%d a=%d", tSliceLow, tSliceHigh, nBytes, nRecord, threadId, recordId, t, a));
-						assert ByteBuffer.wrap(body).getLong() == t;
-					}
+	    			try {
+	    				t += ValueCompressor.getFromBuffer(zpBuffer);
+	    				long a = ValueCompressor.getFromBuffer(zpBuffer);
+	    				
+						if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
+							byte body[] = new byte[34];
+							bodyBuffer.position(recordId * 34);
+							bodyBuffer.get(body);
+							result.add(new Message(a, t, body));
+//							System.out.println(String.format("tLow=%d tHigh=%d nBytes=%d nRecord=%d tid=%d rid=%d t=%d a=%d", tSliceLow, tSliceHigh, nBytes, nRecord, threadId, recordId, t, a));
+							assert ByteBuffer.wrap(body).getLong() == t;
+						}
+						
+	    			} catch (BufferUnderflowException e) {
+	    				e.printStackTrace();
+	    				System.out.println(String.format("ERROR! (%d %d %d %d) tSliceLow=%d tSliceHigh=%d tid=%d rid=%d nr=%d nb=%d", tMin, tMax, aMin, aMax, tSliceLow, tSliceHigh, threadId, recordId, nRecord, nBytes));
+	    				System.exit(-1);
+	    			}
+
 				}
 				
 				assert !zpBuffer.hasRemaining();
