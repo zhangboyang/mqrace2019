@@ -30,9 +30,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	
 	private static class MyBufferedFile {
 		private static final int UNIT = 1000*1000*1000;
-		private static final ByteBuffer buffer1 = ByteBuffer.allocate((int)(UNIT*2.0));
+		private static final ByteBuffer buffer1 = ByteBuffer.allocate((int)(UNIT*2.1));
 		private static long offset1 = 1*UNIT;
-		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.5));
+		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.75));
 		private static long offset2 = 10*UNIT;
 		
 		static {
@@ -433,7 +433,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int MAXTHREAD = 100;
     
     private static final int MAXMSG = 2100000000;
-    private static final int N_TSLICE = 3000000;
+    private static final int N_TSLICE = 2000000;
     private static final int N_ASLICE = 40;
     
     private static final int N_ASLICE2 = 8;
@@ -1365,10 +1365,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 						externalMergeSort();
 						buildIndex();
 						
+						System.gc();
 						MyBufferedFile.init();
-						
 						tAxisCompressedPointData.close();
-				    	
 						
 					} catch (Exception e) {
 						e.printStackTrace();
