@@ -75,16 +75,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
         	return Long.compare(a.getA(), b.getA());
         }
     }
-    private static class TAComparator implements Comparator<Message> {
-        @Override
-        public int compare(Message a, Message b) {
-            int r = Long.compare(a.getT(), b.getT());
-            return r == 0 ? Long.compare(a.getA(), b.getA()) : r;
-        }
-    }
     private static final TComparator tComparator = new TComparator();
     private static final AComparator aComparator = new AComparator();
-    private static final TAComparator taComparator = new TAComparator();
     
     
     private static class ValueCompressor {
@@ -538,7 +530,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	int nRecord = tSliceRecordOffset[tSliceTo + 1] - tSliceRecordOffset[tSliceFrom];
     	reserveIndexReadBuffer(nRecord * 16);
-    	reserveIndexWriteBuffer(nRecord * 8);
+    	reserveIndexWriteBuffer((nRecord + BATCHSIZE * N_ASLICE) * 8);
     	
     	assert tAxisPointData.getFilePointer() == (long)tSliceRecordOffset[tSliceFrom] * 16;
     	tAxisPointData.readFully(indexReadBuffer.array(), 0, nRecord * 16);
@@ -702,6 +694,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int threadId;
     	int recordOffset;
 		long byteOffset;
+		
+		int aSliceId2;
+		int aSliceId3;
     	
 		public MessageWithMetadata(long a, long t, byte[] body) {
 			super(a, t, body);
@@ -745,6 +740,32 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     
+//    private static int writeBuffer2_QSortPartition(int l, int r) {
+//		MessageWithMetadata pivot = writeBuffer2[r - 1];
+//		  int k = l;
+//		  for (int i = l; i < r - 1; i++) {
+//		    if (writeBuffer2[i].getT() < pivot.getT()) {
+//		    	MessageWithMetadata t = writeBuffer2[k];
+//		      writeBuffer2[k] = writeBuffer2[i];
+//		      writeBuffer2[i] = t;
+//		      k++;
+//		    }
+//		  }
+//		  MessageWithMetadata t = writeBuffer2[k];
+//		  writeBuffer2[k] = pivot;
+//		  writeBuffer2[r - 1] = t;
+//		  return k;
+//    }
+//    private static void writeBuffer2_QSort(int l, int r) {
+//	  if (l < r) {
+//	    int m = writeBuffer2_QSortPartition(l, r);
+//	    writeBuffer2_QSort(l, m);
+//	    writeBuffer2_QSort(m + 1, r);
+//	  }
+//	}
+	
+    
+    
     private static ByteBuffer pointWriteBuffer = null;
     private static void reservePointBuffer(int nBytes)
     {
@@ -778,8 +799,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		tAxisBodyStream.write(bodyWriteBuffer.array(), 0, nThread * 20);
     }
 
-    private static final int aAxisCompressedPoint2CurrentRecordCount[] = new int[N_ASLICE2];
-    private static final int aAxisCompressedPoint3CurrentRecordCount[] = new int[N_ASLICE3];
     private static void flushWriteBuffer(long exclusiveT) throws IOException
     {
 //		System.out.println(String.format("flush=%d size=%d", tSliceCount - 1, writeBuffer.size()));
@@ -826,6 +845,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		// 计算每小块内记录数量，并写每小格的数据，此时t块内部必须按a排序
 		reservePointBuffer(nWrite * 16);
 		pointWriteBuffer.position(0);
+		System.arraycopy(writeBuffer, 0, writeBuffer2, 0, nWrite); // 记录按t排序的顺序到writeBuffer2
 		Arrays.sort(writeBuffer, 0, nWrite, aComparator);
 		int aSliceId = 0;
 		
@@ -837,8 +857,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		for (int i = 0; i < N_ASLICE3; i++) {
 			aAxisCompressedPoint3BaseT.set(tSliceId + 1, i, aAxisCompressedPoint3BaseT.get(tSliceId, i));
 		}
-		Arrays.fill(aAxisCompressedPoint2CurrentRecordCount, 0);
-		Arrays.fill(aAxisCompressedPoint3CurrentRecordCount, 0);
 		
 		for (int i = 0; i < nWrite; i++) {
 			MessageWithMetadata msg = writeBuffer[i];
@@ -853,30 +871,22 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			pointWriteBuffer.putLong(t).putLong(a);
 			
 			while (aSlice2Id < N_ASLICE2 && a >= aSlice2Pivot[aSlice2Id + 1]) aSlice2Id++;
-			aAxisCompressedPoint2CurrentRecordCount[aSlice2Id]++;
+			msg.aSliceId2 = aSlice2Id;
+			
 			while (aSlice3Id < N_ASLICE3 && a >= aSlice3Pivot[aSlice3Id + 1]) aSlice3Id++;
-			aAxisCompressedPoint3CurrentRecordCount[aSlice3Id]++;
+			msg.aSliceId3 = aSlice3Id;
 		}
 		
 		
 		ByteBuffer aAxisWriteBuffer = ByteBuffer.allocate(18).order(ByteOrder.LITTLE_ENDIAN);
 		
-		int offset;
 		// 写a轴压缩索引
-		System.arraycopy(writeBuffer, 0, writeBuffer2, 0, nWrite);
-		offset = 0;
-		aSlice2Id = 0;
-		for (int i = 0; i < N_ASLICE2; i++) {
-			int count = aAxisCompressedPoint2CurrentRecordCount[i];
-			Arrays.sort(writeBuffer2, offset, offset + count, taComparator);
-			offset += count;
-		}
 		for (int i = 0; i < nWrite; i++) {
 			MessageWithMetadata msg = writeBuffer2[i];
 			long a = msg.getA();
 			long t = msg.getT();
 			
-			while (aSlice2Id < N_ASLICE2 && a >= aSlice2Pivot[aSlice2Id + 1]) aSlice2Id++;
+			aSlice2Id = msg.aSliceId2;
 			long deltaT2 = t - aAxisCompressedPoint2BaseT.get(tSliceId + 1, aSlice2Id);
 			
 			aAxisWriteBuffer.position(0);
@@ -887,23 +897,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			aAxisCompressedPoint2OutputBytes += aAxisWriteBuffer.position();
 			aAxisCompressedPoint2BaseT.set(tSliceId + 1, aSlice2Id, t);
 		}
-		
-		
-		
-		System.arraycopy(writeBuffer, 0, writeBuffer2, 0, nWrite);
-		offset = 0;
-		aSlice3Id = 0;
-		for (int i = 0; i < N_ASLICE3; i++) {
-			int count = aAxisCompressedPoint3CurrentRecordCount[i];
-			Arrays.sort(writeBuffer2, offset, offset + count, taComparator);
-			offset += count;
-		}
 		for (int i = 0; i < nWrite; i++) {
 			MessageWithMetadata msg = writeBuffer2[i];
 			long a = msg.getA();
 			long t = msg.getT();
 			
-			while (aSlice3Id < N_ASLICE3 && a >= aSlice3Pivot[aSlice3Id + 1]) aSlice3Id++;
+			aSlice3Id = msg.aSliceId3;
 			long deltaT3 = t - aAxisCompressedPoint3BaseT.get(tSliceId + 1, aSlice3Id);
 			
 			aAxisWriteBuffer.position(0);
