@@ -26,22 +26,63 @@ import sun.misc.Unsafe;
  * 实际提交时，请维持包名和类名不变，把方法实现修改为自己的内容；
  */
 public class DefaultMessageStoreImpl extends MessageStore {
-
-    private static final Unsafe unsafe;
-
-    static {
-        Unsafe theUnsafe;
-        try {
-            Field f = Unsafe.class.getDeclaredField("theUnsafe");
-            f.setAccessible(true);
-            theUnsafe = (Unsafe) f.get(null);
-        } catch (Exception e) {
-            theUnsafe = null;
-        }
-        unsafe = theUnsafe;
-    }
 	
 	
+	private static class MyBufferedFile {
+		private static final int UNIT = 1000*1000*1000;
+		private static final ByteBuffer buffer1 = ByteBuffer.allocate((int)(UNIT*1.5));
+		private static long offset1 = 1*UNIT;
+		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.5));
+		private static long offset2 = 10*UNIT;
+		
+		static {
+			System.out.println("MyBufferedFile INIT!");
+		}
+		
+		static void init() throws IOException
+		{
+			tAxisCompressedPointData.seek(offset1);
+			tAxisCompressedPointData.read(buffer1.array());
+			
+			tAxisCompressedPointChannel.read(buffer2, offset2);
+		}
+		
+		static boolean hit1(long position, int size)
+		{
+			return offset1 <= position && position < offset1 + buffer1.capacity() && position + size <= offset1 + buffer1.capacity();
+		}
+		static boolean hit2(long position, int size)
+		{
+			return offset2 <= position && position < offset2 + buffer2.capacity() && position + size <= offset2 + buffer2.capacity();
+		}
+		static boolean hit(long position, int size)
+		{
+			return hit1(position, size) || hit2(position, size);
+		}
+		
+		
+		static void read(ByteBuffer buffer, long position) throws IOException
+		{
+			if (hit1(position, buffer.remaining())) {
+				ByteBuffer tmpBuffer = buffer1.duplicate();
+				tmpBuffer.position((int)(position - offset1));
+				tmpBuffer.limit((int)(position - offset1 + buffer.remaining()));
+				buffer.put(tmpBuffer);
+				return;
+			}
+			if (hit2(position, buffer.remaining())) {
+				ByteBuffer tmpBuffer = buffer2.duplicate();
+				tmpBuffer.position((int)(position - offset2));
+				tmpBuffer.limit((int)(position - offset2 + buffer.remaining()));
+				buffer.put(tmpBuffer);
+				return;
+			}
+			tAxisCompressedPointChannel.read(buffer, position);
+		}
+	}
+	
+	
+
 	private static class My2DIntArray {
 		final int array[];
 		final int width;
@@ -63,18 +104,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		void set(int x, int y, long value) { assert 0 <= x && x < height && 0 <= y && y < width; array[x * width + y] = value; }
 		void inc(int x, int y) { assert 0 <= x && x < height && 0 <= y && y < width; array[x * width + y]++; }
 		void add(int x, int y, long value) { assert 0 <= x && x < height && 0 <= y && y < width; array[x * width + y] += value; }
-	}
-	
-	private static class My2DUnsafeLongArray {
-		final long base;
-		final int width;
-		final int height;
-		
-		public My2DUnsafeLongArray(int _height, int _width) { width = _width; height = _height; base = unsafe.allocateMemory((long)_width * _height * 8); unsafe.setMemory(base, (long)_width * _height * 8, (byte)0); }
-		long get(int x, int y) { assert 0 <= x && x < height && 0 <= y && y < width; return unsafe.getLong(base + ((long)x * width + y) * 8); }
-		void set(int x, int y, long value) { assert 0 <= x && x < height && 0 <= y && y < width; unsafe.putLong(base + ((long)x * width + y) * 8, value); }
-		void inc(int x, int y) { set(x, y, get(x, y) + 1); }
-		void add(int x, int y, long value) { set(x, y, get(x, y) + value); }
 	}
 	
     private static int nextSize(int n)
@@ -704,7 +733,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	// 关闭用于写入的文件
     	tAxisPointData.close();
     	tAxisBodyData.close();
-    	tAxisCompressedPointData.close();
     	aAxisIndexData.close();
     	
     	// 释放内存
@@ -1327,7 +1355,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     @Override
     public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {
 
-    	boolean firstFlag = false;
+//    	boolean firstFlag = false;
     	
     	if (state == 1) {
     		synchronized (stateLock) {
@@ -1343,6 +1371,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
 						externalMergeSort();
 						buildIndex();
 						
+						MyBufferedFile.init();
+						
+						tAxisCompressedPointData.close();
+				    	
+						
 					} catch (Exception e) {
 						e.printStackTrace();
 						state = -1;
@@ -1354,7 +1387,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				
     				System.gc();
 
-    				firstFlag = true;
+//    				firstFlag = true;
     				
     				state = 2;
     			}
@@ -1435,18 +1468,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
 		
 		
-		if (firstFlag) {
-			// 预热JVM
-			System.out.println("[" + new Date() + "]: prepare JVM for stage3 started");
-			for (forcePlanId = 0; forcePlanId < MAXPLAN; forcePlanId++) {
-				for (int i = 0; i < 10000; i++) {
-					getAvgValue(aMin, aMax, tMin, tMax);
-				}
-			}
-			forcePlanId = -1;
-			resetQueryStatistics();
-			System.out.println("[" + new Date() + "]: prepare JVM for stage3 finished");
-		}
+//		if (firstFlag) {
+//			// 预热JVM
+//			System.out.println("[" + new Date() + "]: prepare JVM for stage3 started");
+//			for (forcePlanId = 0; forcePlanId < MAXPLAN; forcePlanId++) {
+//				for (int i = 0; i < 10000; i++) {
+//					getAvgValue(aMin, aMax, tMin, tMax);
+//				}
+//			}
+//			forcePlanId = -1;
+//			resetQueryStatistics();
+//			System.out.println("[" + new Date() + "]: prepare JVM for stage3 finished");
+//		}
 		
 		
     	return result;
@@ -1557,7 +1590,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOCount++;
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocateDirect(nRecord * 16);
+		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
@@ -1601,13 +1634,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOCount += 2;
 		result.aAxisIOBytes += (nRecordLow + nRecordHigh) * 8;
 		
-		ByteBuffer lowBuffer = ByteBuffer.allocateDirect(nRecordLow * 8);
+		ByteBuffer lowBuffer = ByteBuffer.allocate(nRecordLow * 8);
 		lowBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		aAxisIndexChannel.read(lowBuffer, (long)baseOffsetLow * 8);
 		lowBuffer.position(0);
 		LongBuffer lowBufferL = lowBuffer.asLongBuffer();
 		
-		ByteBuffer highBuffer = ByteBuffer.allocateDirect(nRecordHigh * 8);
+		ByteBuffer highBuffer = ByteBuffer.allocate(nRecordHigh * 8);
 		highBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		if (aSliceLow != aSliceHigh) {
 			aAxisIndexChannel.read(highBuffer, (long)baseOffsetHigh * 8);
@@ -1739,7 +1772,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.tAxisIOCount++; // FIXME: 分开统计？
 		result.tAxisIOBytes += nRecord * 16;
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocateDirect(nRecord * 16);
+		ByteBuffer pointBuffer = ByteBuffer.allocate(nRecord * 16);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
 		tAxisPointChannel.read(pointBuffer, (long)baseOffset * 16);
 		pointBuffer.position(0);
@@ -1774,15 +1807,21 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
 		long baseOffset = tSliceCompressedPointByteOffset[tSliceLow];
 		long nBytes = tSliceCompressedPointByteOffset[tSliceHigh + 1] - baseOffset;
-		result.addIOCost(nBytes);
+		if (nBytes != (int)nBytes || !MyBufferedFile.hit(baseOffset, (int)nBytes)) {
+			result.addIOCost(nBytes);
+			if (!doRealQuery) return;
+			result.tAxisIOCount++; // FIXME: 分开统计？
+			result.tAxisIOBytes += nBytes;
+		}
 		if (!doRealQuery) return;
-		result.tAxisIOCount++; // FIXME: 分开统计？
-		result.tAxisIOBytes += nBytes;
 		
 		
-		ByteBuffer pointBuffer = ByteBuffer.allocateDirect((int)nBytes);
+		
+		
+		ByteBuffer pointBuffer = ByteBuffer.allocate((int)nBytes);
 		pointBuffer.order(ByteOrder.LITTLE_ENDIAN);
-		tAxisCompressedPointChannel.read(pointBuffer, baseOffset);
+//		tAxisCompressedPointChannel.read(pointBuffer, baseOffset);
+		MyBufferedFile.read(pointBuffer, baseOffset);
 		pointBuffer.position(0);
 		
 		for (int tSliceId = tSliceLow; tSliceId <= tSliceHigh; tSliceId++) {
@@ -1816,7 +1855,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOCount++; // FIXME: 分开统计？
 		result.aAxisIOBytes += nBytes;
 		
-    	ByteBuffer buffer = ByteBuffer.allocateDirect((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
+    	ByteBuffer buffer = ByteBuffer.allocate((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
     	aAxisCompressedPoint2Channel[aSlice2Id].read(buffer, aAxisCompressedPoint2ByteOffset.get(tSliceLow, aSlice2Id));
     	buffer.position(0);
     	
@@ -1862,7 +1901,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOCount++; // FIXME: 分开统计？
 		result.aAxisIOBytes += nBytes;
 		
-    	ByteBuffer buffer = ByteBuffer.allocateDirect((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
+    	ByteBuffer buffer = ByteBuffer.allocate((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
     	aAxisCompressedPoint3Channel[aSlice3Id].read(buffer, aAxisCompressedPoint3ByteOffset.get(tSliceLow, aSlice3Id));
     	buffer.position(0);
     	
