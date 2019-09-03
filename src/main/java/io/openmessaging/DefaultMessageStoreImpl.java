@@ -379,6 +379,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final int N_ASLICE2 = 8;
     private static final int N_ASLICE3 = N_ASLICE2 + 1;
+    private static final int N_ASLICE4 = N_ASLICE2 + 1;
     
     private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
     
@@ -398,6 +399,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final long aSlice3Pivot[] = new long[N_ASLICE3 + 1];
     private static final My2DLongArray aAxisCompressedPoint3BaseT = new My2DLongArray(N_TSLICE + 1, N_ASLICE3);
     private static final My2DLongArray aAxisCompressedPoint3ByteOffset = new My2DLongArray(N_TSLICE + 1, N_ASLICE3);
+    
+    private static final long aSlice4Pivot[] = new long[N_ASLICE4 + 1];
+    private static final My2DLongArray aAxisCompressedPoint4BaseT = new My2DLongArray(N_TSLICE + 1, N_ASLICE4);
+    private static final My2DLongArray aAxisCompressedPoint4ByteOffset = new My2DLongArray(N_TSLICE + 1, N_ASLICE4);
     
     
     private static final My2DIntArray blockOffsetTableAxisT = new My2DIntArray(N_TSLICE + 1, N_ASLICE + 1);
@@ -427,6 +432,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final FileChannel aAxisCompressedPoint3Channel[] = new FileChannel[N_ASLICE3];
     private static long aAxisCompressedPoint3OutputBytes = 0;
     
+    private static final BufferedOutputStream aAxisCompressedPoint4Data[] = new BufferedOutputStream[N_ASLICE4];
+    private static final FileChannel aAxisCompressedPoint4Channel[] = new FileChannel[N_ASLICE4];
+    private static long aAxisCompressedPoint4OutputBytes = 0;
+    
     private static final int BUFSZ = 1024 * 1024 * 32;
     static {
     	try {
@@ -439,6 +448,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	    		String fn = storagePath + String.format("aAxis.zp3.%04d.data", i);
 	    		aAxisCompressedPoint3Data[i] = new BufferedOutputStream(new FileOutputStream(fn), BUFSZ);
 	    		aAxisCompressedPoint3Channel[i] = FileChannel.open(Paths.get(fn));
+	    	}
+	    	for (int i = 0; i < N_ASLICE4; i++) {
+	    		String fn = storagePath + String.format("aAxis.zp4.%04d.data", i);
+	    		aAxisCompressedPoint4Data[i] = new BufferedOutputStream(new FileOutputStream(fn), BUFSZ);
+	    		aAxisCompressedPoint4Channel[i] = FileChannel.open(Paths.get(fn));
 	    	}
     	} catch (IOException e) {
     		e.printStackTrace();
@@ -502,6 +516,20 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			}
 		}
 		assert aSlice3Pivot[l] <= aValue && aValue < aSlice3Pivot[l + 1];
+		return l;
+    }
+    private static int findSliceA4(long aValue)
+    {
+		int l = 0, r = N_ASLICE4;
+		while (r - l > 1) {
+			int m = (l + r) / 2;
+			if (aValue >= aSlice4Pivot[m]) {
+				l = m;
+			} else {
+				r = m;
+			}
+		}
+		assert aSlice4Pivot[l] <= aValue && aValue < aSlice4Pivot[l + 1];
 		return l;
     }
     
@@ -654,6 +682,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	}
     	
     	
+    	// 造4号a轴压缩点偏移表
+    	for (int aSlice4Id = 0; aSlice4Id < N_ASLICE4; aSlice4Id++) {
+    		long offsetL = 0;
+    		for (int tSliceId = 0; tSliceId <= tSliceCount; tSliceId++) {
+    			long t = aAxisCompressedPoint4ByteOffset.get(tSliceId, aSlice4Id);
+    			aAxisCompressedPoint4ByteOffset.set(tSliceId, aSlice4Id, offsetL);
+    			offsetL += t;
+    		}
+    	}
+    	
+    	
     }
     
     
@@ -696,8 +735,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int recordOffset;
 		long byteOffset;
 		
-		int aSliceId2;
-		int aSliceId3;
+		int aSlice2Id;
+		int aSlice3Id;
+		int aSlice4Id;
     	
 		public MessageWithMetadata(long a, long t, byte[] body) {
 			super(a, t, body);
@@ -850,13 +890,15 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		Arrays.sort(writeBuffer, 0, nWrite, aComparator);
 		int aSliceId = 0;
 		
-		int aSlice2Id = 0;
-		int aSlice3Id = 0; 
+		int aSlice2Id = 0, aSlice3Id = 0, aSlice4Id = 0; 
 		for (int i = 0; i < N_ASLICE2; i++) {
 			aAxisCompressedPoint2BaseT.set(tSliceId + 1, i, aAxisCompressedPoint2BaseT.get(tSliceId, i));
 		}
 		for (int i = 0; i < N_ASLICE3; i++) {
 			aAxisCompressedPoint3BaseT.set(tSliceId + 1, i, aAxisCompressedPoint3BaseT.get(tSliceId, i));
+		}
+		for (int i = 0; i < N_ASLICE4; i++) {
+			aAxisCompressedPoint4BaseT.set(tSliceId + 1, i, aAxisCompressedPoint4BaseT.get(tSliceId, i));
 		}
 		
 		for (int i = 0; i < nWrite; i++) {
@@ -872,10 +914,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			pointWriteBuffer.putLong(t).putLong(a);
 			
 			while (aSlice2Id < N_ASLICE2 && a >= aSlice2Pivot[aSlice2Id + 1]) aSlice2Id++;
-			msg.aSliceId2 = aSlice2Id;
-			
+			msg.aSlice2Id = aSlice2Id;
 			while (aSlice3Id < N_ASLICE3 && a >= aSlice3Pivot[aSlice3Id + 1]) aSlice3Id++;
-			msg.aSliceId3 = aSlice3Id;
+			msg.aSlice3Id = aSlice3Id;
+			while (aSlice4Id < N_ASLICE4 && a >= aSlice4Pivot[aSlice4Id + 1]) aSlice4Id++;
+			msg.aSlice4Id = aSlice4Id;
+
 		}
 		
 		
@@ -887,7 +931,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			long a = msg.getA();
 			long t = msg.getT();
 			
-			aSlice2Id = msg.aSliceId2;
+			aSlice2Id = msg.aSlice2Id;
 			long deltaT2 = t - aAxisCompressedPoint2BaseT.get(tSliceId + 1, aSlice2Id);
 			
 			aAxisWriteBuffer.position(0);
@@ -903,7 +947,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			long a = msg.getA();
 			long t = msg.getT();
 			
-			aSlice3Id = msg.aSliceId3;
+			aSlice3Id = msg.aSlice3Id;
 			long deltaT3 = t - aAxisCompressedPoint3BaseT.get(tSliceId + 1, aSlice3Id);
 			
 			aAxisWriteBuffer.position(0);
@@ -913,6 +957,22 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			aAxisCompressedPoint3ByteOffset.add(tSliceId, aSlice3Id, aAxisWriteBuffer.position());
 			aAxisCompressedPoint3OutputBytes += aAxisWriteBuffer.position();
 			aAxisCompressedPoint3BaseT.set(tSliceId + 1, aSlice3Id, t);
+		}
+		for (int i = 0; i < nWrite; i++) {
+			MessageWithMetadata msg = writeBuffer2[i];
+			long a = msg.getA();
+			long t = msg.getT();
+			
+			aSlice4Id = msg.aSlice4Id;
+			long deltaT4 = t - aAxisCompressedPoint4BaseT.get(tSliceId + 1, aSlice4Id);
+			
+			aAxisWriteBuffer.position(0);
+			ValueCompressor.putToBuffer(aAxisWriteBuffer, deltaT4);
+			ValueCompressor.putToBuffer(aAxisWriteBuffer, a);
+			aAxisCompressedPoint4Data[aSlice4Id].write(aAxisWriteBuffer.array(), 0, aAxisWriteBuffer.position());
+			aAxisCompressedPoint4ByteOffset.add(tSliceId, aSlice4Id, aAxisWriteBuffer.position());
+			aAxisCompressedPoint4OutputBytes += aAxisWriteBuffer.position();
+			aAxisCompressedPoint4BaseT.set(tSliceId + 1, aSlice4Id, t);
 		}
 		
 		shiftWriteBuffer(nWrite);
@@ -970,6 +1030,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	System.out.println(String.format("tSliceCompressedPointBytes=%d  (%f b/rec)", tSliceCompressedPointByteOffset[tSliceCount], (double)tSliceCompressedPointByteOffset[tSliceCount]/insCount));
     	System.out.println(String.format("aAxisCompressedPoint2OutputBytes=%d  (%f b/rec)", aAxisCompressedPoint2OutputBytes, (double)aAxisCompressedPoint2OutputBytes / insCount));
     	System.out.println(String.format("aAxisCompressedPoint3OutputBytes=%d  (%f b/rec)", aAxisCompressedPoint3OutputBytes, (double)aAxisCompressedPoint3OutputBytes / insCount));
+    	System.out.println(String.format("aAxisCompressedPoint4OutputBytes=%d  (%f b/rec)", aAxisCompressedPoint4OutputBytes, (double)aAxisCompressedPoint4OutputBytes / insCount));
     	
     	tAxisPointStream.close();
     	tAxisPointStream = null;
@@ -985,6 +1046,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	for (int i = 0; i < N_ASLICE3; i++) {
     		aAxisCompressedPoint3Data[i].close();
     		aAxisCompressedPoint3Data[i] = null;
+    	}
+    	for (int i = 0; i < N_ASLICE4; i++) {
+    		aAxisCompressedPoint4Data[i].close();
+    		aAxisCompressedPoint4Data[i] = null;
     	}
     }
     
@@ -1114,12 +1179,22 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	// 计算3号a索引的分割点
     	for (int i = 0; i < N_ASLICE3 - 1; i++) {
-    		aSlice3Pivot[i + 1] = aSamples.get(aSamples.size() / (N_ASLICE3 - 1) / 2 + aSamples.size() / (N_ASLICE3 - 1) * i).longValue();
+    		aSlice3Pivot[i + 1] = aSamples.get(aSamples.size() / (N_ASLICE3 - 1) / 3 + aSamples.size() / (N_ASLICE3 - 1) * i).longValue();
     	}
     	aSlice3Pivot[0] = globalMinA;
     	aSlice3Pivot[N_ASLICE3] = Long.MAX_VALUE;
     	for (int i = 0; i <= N_ASLICE3; i++) {
     		System.out.println(String.format("aSlice3Pivot[%d]=%d", i, aSlice3Pivot[i]));
+    	}
+    	
+    	// 计算4号a索引的分割点
+    	for (int i = 0; i < N_ASLICE4 - 1; i++) {
+    		aSlice4Pivot[i + 1] = aSamples.get(aSamples.size() / (N_ASLICE4 - 1) / 3 * 2 + aSamples.size() / (N_ASLICE4 - 1) * i).longValue();
+    	}
+    	aSlice4Pivot[0] = globalMinA;
+    	aSlice4Pivot[N_ASLICE4] = Long.MAX_VALUE;
+    	for (int i = 0; i <= N_ASLICE4; i++) {
+    		System.out.println(String.format("aSlice4Pivot[%d]=%d", i, aSlice4Pivot[i]));
     	}
     }
 
@@ -1457,7 +1532,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     
-    private static final int MAXPLAN = 5;
+    private static final int MAXPLAN = 6;
     private static final double IOSIZE_FACTOR = 27400; // SSD速度为 200MB/s 10000IOPS  这样算每个IO大约20KB
     
     private static class AverageResult {
@@ -1479,6 +1554,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	int aSlice2High;
     	int aSlice3Low;
     	int aSlice3High;
+    	int aSlice4Low;
+    	int aSlice4High;
     	
     	//////////////
     	
@@ -1868,6 +1945,47 @@ public class DefaultMessageStoreImpl extends MessageStore {
     }
     
     
+	////////////////////////////////////////////////////////////////////////////////////////
+	// 算法5：对a轴上的4号压缩分块进行暴力查找
+    
+    private static void queryAZP4(AverageResult result, boolean doRealQuery, int aSlice4Id, int tSliceLow, int tSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
+    {
+    	long nBytes = aAxisCompressedPoint4ByteOffset.get(tSliceHigh + 1, aSlice4Id) - aAxisCompressedPoint4ByteOffset.get(tSliceLow, aSlice4Id);
+    	
+    	result.addIOCost(nBytes);
+		if (!doRealQuery) return;
+		result.aAxisIOCount++; // FIXME: 分开统计？
+		result.aAxisIOBytes += nBytes;
+		
+    	ByteBuffer buffer = ByteBuffer.allocateDirect((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
+    	aAxisCompressedPoint4Channel[aSlice4Id].read(buffer, aAxisCompressedPoint4ByteOffset.get(tSliceLow, aSlice4Id));
+    	buffer.position(0);
+    	
+    	long t = aAxisCompressedPoint4BaseT.get(tSliceLow, aSlice4Id);
+		while (buffer.hasRemaining()) {
+			t += ValueCompressor.getFromBuffer(buffer);
+			long a = ValueCompressor.getFromBuffer(buffer);
+			if (pointInRect(t, a, tMin, tMax, aMin, aMax)) {
+				result.sum += a;
+				result.cnt++;
+			}
+		}
+    }
+    private static void queryAlgorithm5(AverageResult result, boolean doRealQuery) throws IOException
+    {
+    	long tMin = result.tMin;
+    	long tMax = result.tMax;
+    	long aMin = result.aMin;
+    	long aMax = result.aMax;
+    	int tSliceLow = result.tSliceLow;
+    	int tSliceHigh = result.tSliceHigh;
+    	int aSlice4Low = result.aSlice4Low;
+    	int aSlice4High = result.aSlice4High;
+    	
+    	for (int aSlice4Id = aSlice4Low; aSlice4Id <= aSlice4High; aSlice4Id++) {
+    		queryAZP4(result, doRealQuery, aSlice4Id, tSliceLow, tSliceHigh, tMin, tMax, aMin, aMax);
+    	}
+    }
     
     
     ////////////////////////////////////////////////////////////////////////////////////////
@@ -1884,6 +2002,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	case 2: queryAlgorithm2(result, doRealQuery); break;
     	case 3: queryAlgorithm3(result, doRealQuery); break;
     	case 4: queryAlgorithm4(result, doRealQuery); break;
+    	case 5: queryAlgorithm5(result, doRealQuery); break;
     	default: assert false;
     	}
     }
@@ -1962,6 +2081,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	result.aSlice2High = findSliceA2(aMax);
     	result.aSlice3Low = findSliceA3(aMin);
     	result.aSlice3High = findSliceA3(aMax);
+    	result.aSlice4Low = findSliceA4(aMin);
+    	result.aSlice4High = findSliceA4(aMax);
     	
 //    	System.out.println(String.format("block: t[%d %d] a[%d %d]", tSliceLow, tSliceHigh, aSliceLow, aSliceHigh));  
     	try {
@@ -2008,5 +2129,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		System.out.println(String.format("planCount[%d]=%d", i, planCount.get(i)));
     	}
     	System.out.println(String.format("totalIOCost=%f", totalIOCost.sum()));
+    	System.out.println(String.format("IO per Query: %f", totalIOCost.sum() / totalAvgQuery.get()));
     }
 }
