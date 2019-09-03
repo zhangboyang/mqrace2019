@@ -427,16 +427,17 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final FileChannel aAxisCompressedPoint3Channel[] = new FileChannel[N_ASLICE3];
     private static long aAxisCompressedPoint3OutputBytes = 0;
     
+    private static final int BUFSZ = 1024 * 1024 * 32;
     static {
     	try {
 	    	for (int i = 0; i < N_ASLICE2; i++) {
 	    		String fn = storagePath + String.format("aAxis.zp2.%04d.data", i);
-	    		aAxisCompressedPoint2Data[i] = new BufferedOutputStream(new FileOutputStream(fn));
+	    		aAxisCompressedPoint2Data[i] = new BufferedOutputStream(new FileOutputStream(fn), BUFSZ);
 	    		aAxisCompressedPoint2Channel[i] = FileChannel.open(Paths.get(fn));
 	    	}
 	    	for (int i = 0; i < N_ASLICE3; i++) {
 	    		String fn = storagePath + String.format("aAxis.zp3.%04d.data", i);
-	    		aAxisCompressedPoint3Data[i] = new BufferedOutputStream(new FileOutputStream(fn));
+	    		aAxisCompressedPoint3Data[i] = new BufferedOutputStream(new FileOutputStream(fn), BUFSZ);
 	    		aAxisCompressedPoint3Channel[i] = FileChannel.open(Paths.get(fn));
 	    	}
     	} catch (IOException e) {
@@ -979,12 +980,12 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	for (int i = 0; i < N_ASLICE2; i++) {
     		aAxisCompressedPoint2Data[i].close();
+    		aAxisCompressedPoint2Data[i] = null;
     	}
     	for (int i = 0; i < N_ASLICE3; i++) {
     		aAxisCompressedPoint3Data[i].close();
+    		aAxisCompressedPoint3Data[i] = null;
     	}
-    	
-    
     }
     
 
