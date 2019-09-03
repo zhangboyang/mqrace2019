@@ -95,9 +95,20 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	//    11111110 xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx   8字节-56bit
     	//    11111111 xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx  9字节-64bit
     	
+    	
+    	private static long f(long value)
+    	{
+    		return value < 0 ? ((~value << 1) | 1) : (value << 1);  
+    	}
+    	private static long f_1(long value)
+    	{
+    		return (value & 1) == 1 ? ~(value >>> 1) : (value >>> 1); 
+    	}
+    	
     	public static void putToBuffer(ByteBuffer buffer, long value)
     	{
     		assert buffer.order() == ByteOrder.LITTLE_ENDIAN;
+    		value = f(value);
     		if ((value & 0x7fL) == value) {
     			buffer.put((byte)(value));
     		} else if ((value & 0x3fffL) == value) {
@@ -150,6 +161,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     	
     	public static int getLengthByValue(long value)
     	{
+    		value = f(value);
     		if ((value & 0x7fL) == value) {
     			return 1;
     		} else if ((value & 0x3fffL) == value) {
@@ -223,6 +235,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			value = buffer.getLong();
     		}
     		
+    		value = f_1(value);
     		return value;
     	}
     }
@@ -859,49 +872,59 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		}
 		writeBodyData();
 
-		// t块内部按a排序
-		Arrays.sort(writeBuffer, 0, nWrite, aComparator);
-
-		reservePointBuffer(nWrite * 16);
-		pointWriteBuffer.position(0);
-		
-		// 计算每小块内记录数量，并写t轴索引
-		int aSliceId = 0;
-		long lastT = tSlicePivot[tSliceId];
-		
+		// 写t轴压缩索引（为了保证t的压缩效率，t块内部应按照t排序
 		reserveBodyBuffer(nWrite * 18);
-		ByteBuffer compressedPointBuffer = bodyWriteBuffer;
+		ByteBuffer compressedPointBuffer = bodyWriteBuffer; // 重用bodyWriteBuffer的空间，懒得再分开了
 		compressedPointBuffer.position(0);
 		
-		int aSlice2Id = 0;
-		int aSlice3Id = 0; 
+		long lastT = tSlicePivot[tSliceId];
+		for (int i = 0; i < nWrite; i++) {
+			MessageWithMetadata msg = writeBuffer[i];
+			long a = msg.getA();
+			long t = msg.getT();
+			
+			long deltaT = t - lastT;
+			ValueCompressor.putToBuffer(compressedPointBuffer, deltaT);
+			ValueCompressor.putToBuffer(compressedPointBuffer, a);
+			lastT = t;
+		}
+		
+		
+		// 计算每小块内记录数量，并写每小格的数据，此时t块内部必须按a排序
+		reservePointBuffer(nWrite * 16);
+		pointWriteBuffer.position(0);
+		Arrays.sort(writeBuffer, 0, nWrite, aComparator);
+		int aSliceId = 0;
 		for (int i = 0; i < N_ASLICE2; i++) {
 			aAxisCompressedPoint2BaseT.set(tSliceId + 1, i, aAxisCompressedPoint2BaseT.get(tSliceId, i));
 		}
 		for (int i = 0; i < N_ASLICE3; i++) {
 			aAxisCompressedPoint3BaseT.set(tSliceId + 1, i, aAxisCompressedPoint3BaseT.get(tSliceId, i));
 		}
-		
 		for (int i = 0; i < nWrite; i++) {
 			MessageWithMetadata msg = writeBuffer[i];
 			long a = msg.getA();
 			long t = msg.getT();
 			
 			while (aSliceId < N_ASLICE && a >= aSlicePivot[aSliceId + 1]) aSliceId++;
-//			assert aSliceId == findSliceA(a);
-			while (aSlice2Id < N_ASLICE2 && a >= aSlice2Pivot[aSlice2Id + 1]) aSlice2Id++;
-//			assert aSlice2Id == findSliceA2(a);
-			while (aSlice3Id < N_ASLICE3 && a >= aSlice3Pivot[aSlice3Id + 1]) aSlice3Id++;
 			
 			blockOffsetTableAxisT.inc(tSliceId, aSliceId);
 			blockOffsetTableAxisA.inc(tSliceId, aSliceId);
 			
 			pointWriteBuffer.putLong(t).putLong(a);
+		}
+		
+		
+		// 写a轴压缩索引
+		int aSlice2Id = 0;
+		int aSlice3Id = 0; 
+		for (int i = 0; i < nWrite; i++) {
+			MessageWithMetadata msg = writeBuffer[i];
+			long a = msg.getA();
+			long t = msg.getT();
 			
-			long deltaT = t - lastT;
-			ValueCompressor.putToBuffer(compressedPointBuffer, deltaT);
-			ValueCompressor.putToBuffer(compressedPointBuffer, a);
-			lastT = t;
+			while (aSlice2Id < N_ASLICE2 && a >= aSlice2Pivot[aSlice2Id + 1]) aSlice2Id++;
+			while (aSlice3Id < N_ASLICE3 && a >= aSlice3Pivot[aSlice3Id + 1]) aSlice3Id++;
 			
 			long deltaT2 = t - aAxisCompressedPoint2BaseT.get(tSliceId + 1, aSlice2Id);
 			aAxisCompressedPoint2ByteOffset.add(tSliceId, aSlice2Id, ValueCompressor.getLengthByValue(deltaT2) + ValueCompressor.getLengthByValue(a));
@@ -1037,7 +1060,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				queueHead[minPos] = Long.MAX_VALUE;
 			} else {
 				ByteBuffer buffer = queueData[minPos];
-				if (buffer.remaining() < 64000) {
+				if (buffer.remaining() < 64) {
 					int nCopy = bufferCap[minPos] - buffer.position();
 					System.arraycopy(buffer.array(), buffer.position(), buffer.array(), 0, nCopy);
 					buffer.position(0);
