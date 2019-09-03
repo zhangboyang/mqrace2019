@@ -1037,8 +1037,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				queueHead[minPos] = Long.MAX_VALUE;
 			} else {
 				ByteBuffer buffer = queueData[minPos];
-				if (buffer.remaining() < 64) {
-					int nCopy = buffer.remaining();
+				if (buffer.remaining() < 64000) {
+					int nCopy = bufferCap[minPos] - buffer.position();
 					System.arraycopy(buffer.array(), buffer.position(), buffer.array(), 0, nCopy);
 					buffer.position(0);
 					int nReadBytes = (int)Math.min(buffer.capacity() - nCopy, putTLD[minPos].outputBytes - readBytes[minPos]);
