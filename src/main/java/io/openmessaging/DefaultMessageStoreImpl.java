@@ -5,6 +5,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.lang.reflect.Field;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -18,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.DoubleAdder;
+import sun.misc.Unsafe;
 
 /**
  * 这是一个简单的基于内存的实现，以方便选手理解题意；
@@ -25,7 +27,19 @@ import java.util.concurrent.atomic.DoubleAdder;
  */
 public class DefaultMessageStoreImpl extends MessageStore {
 
-	
+    private static final Unsafe unsafe;
+
+    static {
+        Unsafe theUnsafe;
+        try {
+            Field f = Unsafe.class.getDeclaredField("theUnsafe");
+            f.setAccessible(true);
+            theUnsafe = (Unsafe) f.get(null);
+        } catch (Exception e) {
+            theUnsafe = null;
+        }
+        unsafe = theUnsafe;
+    }
 	
 	
 	private static class My2DIntArray {
@@ -49,6 +63,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		void set(int x, int y, long value) { assert 0 <= x && x < height && 0 <= y && y < width; array[x * width + y] = value; }
 		void inc(int x, int y) { assert 0 <= x && x < height && 0 <= y && y < width; array[x * width + y]++; }
 		void add(int x, int y, long value) { assert 0 <= x && x < height && 0 <= y && y < width; array[x * width + y] += value; }
+	}
+	
+	private static class My2DUnsafeLongArray {
+		final long base;
+		final int width;
+		final int height;
+		
+		public My2DUnsafeLongArray(int _height, int _width) { width = _width; height = _height; base = unsafe.allocateMemory((long)_width * _height * 8); unsafe.setMemory(base, (long)_width * _height * 8, (byte)0); }
+		long get(int x, int y) { assert 0 <= x && x < height && 0 <= y && y < width; return unsafe.getLong(base + ((long)x * width + y) * 8); }
+		void set(int x, int y, long value) { assert 0 <= x && x < height && 0 <= y && y < width; unsafe.putLong(base + ((long)x * width + y) * 8, value); }
+		void inc(int x, int y) { set(x, y, get(x, y) + 1); }
+		void add(int x, int y, long value) { set(x, y, get(x, y) + value); }
 	}
 	
     private static int nextSize(int n)
@@ -443,16 +469,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	    		String fn = storagePath + String.format("aAxis.zp2.%04d.data", i);
 	    		aAxisCompressedPoint2Data[i] = new BufferedOutputStream(new FileOutputStream(fn), BUFSZ);
 	    		aAxisCompressedPoint2Channel[i] = FileChannel.open(Paths.get(fn));
+	    		reserveDiskSpace(fn, insCount / N_ASLICE2 * 8); // just a hint
 	    	}
 	    	for (int i = 0; i < N_ASLICE3; i++) {
 	    		String fn = storagePath + String.format("aAxis.zp3.%04d.data", i);
 	    		aAxisCompressedPoint3Data[i] = new BufferedOutputStream(new FileOutputStream(fn), BUFSZ);
 	    		aAxisCompressedPoint3Channel[i] = FileChannel.open(Paths.get(fn));
+	    		reserveDiskSpace(fn, insCount / N_ASLICE3 * 8); // just a hint
 	    	}
 	    	for (int i = 0; i < N_ASLICE4; i++) {
 	    		String fn = storagePath + String.format("aAxis.zp4.%04d.data", i);
 	    		aAxisCompressedPoint4Data[i] = new BufferedOutputStream(new FileOutputStream(fn), BUFSZ);
 	    		aAxisCompressedPoint4Channel[i] = FileChannel.open(Paths.get(fn));
+	    		reserveDiskSpace(fn, insCount / N_ASLICE4 * 8); // just a hint
 	    	}
     	} catch (IOException e) {
     		e.printStackTrace();
@@ -1376,7 +1405,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     @Override
     public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {
 
-//    	boolean firstFlag = false;
+    	boolean firstFlag = false;
     	
     	if (state == 1) {
     		synchronized (stateLock) {
@@ -1403,7 +1432,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				
     				System.gc();
 
-//    				firstFlag = true;
+    				firstFlag = true;
     				
     				state = 2;
     			}
@@ -1484,18 +1513,18 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
 		
 		
-//		if (firstFlag) {
-//			// 预热JVM
-//			System.out.println("[" + new Date() + "]: prepare JVM for stage3 started");
-//			for (forcePlanId = 0; forcePlanId < MAXPLAN; forcePlanId++) {
-//				for (int i = 0; i < 10000; i++) {
-//					getAvgValue(aMin, aMax, tMin, tMax);
-//				}
-//			}
-//			forcePlanId = -1;
-//			resetQueryStatistics();
-//			System.out.println("[" + new Date() + "]: prepare JVM for stage3 finished");
-//		}
+		if (firstFlag) {
+			// 预热JVM
+			System.out.println("[" + new Date() + "]: prepare JVM for stage3 started");
+			for (forcePlanId = 0; forcePlanId < MAXPLAN; forcePlanId++) {
+				for (int i = 0; i < 10000; i++) {
+					getAvgValue(aMin, aMax, tMin, tMax);
+				}
+			}
+			forcePlanId = -1;
+			resetQueryStatistics();
+			System.out.println("[" + new Date() + "]: prepare JVM for stage3 finished");
+		}
 		
 		
     	return result;
