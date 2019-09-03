@@ -30,10 +30,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
 	
 	private static class MyBufferedFile {
 		private static final int UNIT = 1000*1000*1000;
-		private static final ByteBuffer buffer1 = ByteBuffer.allocate((int)(UNIT*2.1));
-		private static long offset1 = 1*UNIT;
-		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.75));
-		private static long offset2 = 10*UNIT;
+		private static final ByteBuffer buffer1 = ByteBuffer.allocate((int)(UNIT*2.0));
+		private static long offset1 = 1L*UNIT;
+		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.7));
+		private static long offset2 = 4L*UNIT;
 		
 		static {
 			System.out.println("[" + new Date() + "]: MyBufferedFile INIT!");
@@ -41,11 +41,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		
 		static void init() throws IOException
 		{
-			System.out.println("[" + new Date() + "]: MyBufferedFile load buffer1 started");
+			System.out.println("[" + new Date() + "]: MyBufferedFile load buffer1 started   offset1="+offset1);
 			tAxisCompressedPointData.seek(offset1);
 			tAxisCompressedPointData.read(buffer1.array());
 			
-			System.out.println("[" + new Date() + "]: MyBufferedFile load buffer2 started");
+			System.out.println("[" + new Date() + "]: MyBufferedFile load buffer2 started   offset2="+offset2);
 			tAxisCompressedPointChannel.read(buffer2, offset2);
 			
 			System.out.println("[" + new Date() + "]: MyBufferedFile load done");
@@ -433,7 +433,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int MAXTHREAD = 100;
     
     private static final int MAXMSG = 2100000000;
-    private static final int N_TSLICE = 2000000;
+    private static final int N_TSLICE = 2500000;
     private static final int N_ASLICE = 40;
     
     private static final int N_ASLICE2 = 8;
@@ -2040,7 +2040,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.exit(-1);
 		}
     	
-//    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [t %d; a %d (%f)]; (%d %d %d %d) => cnt=%d; plan=%d [%f %f]; (t %d %d) (a %d %d)", tMax-tMin, aMax-aMin, (double)(aMax-aMin)/(globalMaxA - globalMinA), tMin, tMax, aMin, aMax, result.cnt, result.curPlan, result.ioCost[0], result.ioCost[1], result.tAxisIOCount, result.tAxisIOBytes, result.aAxisIOCount, result.aAxisIOBytes));
+//    	System.out.println("[" + new Date() + "]: " + String.format("queryAverage: [t %d; a %d (%f)]; (%d %d %d %d) => cnt=%d; plan=%d [%f %f %f]; (t %d %d) (a %d %d)", tMax-tMin, aMax-aMin, (double)(aMax-aMin)/(globalMaxA - globalMinA), tMin, tMax, aMin, aMax, result.cnt, result.curPlan, result.ioCost[0], result.ioCost[1], result.ioCost[2], result.tAxisIOCount, result.tAxisIOBytes, result.aAxisIOCount, result.aAxisIOBytes));
     	
     	
     	
