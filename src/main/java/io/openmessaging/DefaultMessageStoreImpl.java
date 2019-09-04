@@ -32,8 +32,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		private static final int UNIT = 1000*1000*1000;
 		private static final ByteBuffer buffer1 = ByteBuffer.allocate((int)(UNIT*2.0));
 		private static long offset1 = 1L*UNIT;
-		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.7));
+		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.75));
 		private static long offset2 = 4L*UNIT;
+		private static final ByteBuffer buffer3 = ByteBuffer.allocate((int)(UNIT*0.5));
+		private static long offset3 = 8L*UNIT;
 		
 		static {
 			System.out.println("[" + new Date() + "]: MyBufferedFile INIT!");
@@ -48,6 +50,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
 			System.out.println("[" + new Date() + "]: MyBufferedFile load buffer2 started   offset2="+offset2);
 			tAxisCompressedPointChannel.read(buffer2, offset2);
 			
+			System.out.println("[" + new Date() + "]: MyBufferedFile load buffer3 started   offset3="+offset3);
+			tAxisCompressedPointData.seek(offset3);
+			tAxisCompressedPointData.read(buffer3.array());
+			
 			System.out.println("[" + new Date() + "]: MyBufferedFile load done");
 		}
 		
@@ -59,9 +65,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		{
 			return offset2 <= position && position < offset2 + buffer2.capacity() && position + size <= offset2 + buffer2.capacity();
 		}
+		static boolean hit3(long position, int size)
+		{
+			return offset3 <= position && position < offset3 + buffer3.capacity() && position + size <= offset3 + buffer3.capacity();
+		}
 		static boolean hit(long position, int size)
 		{
-			return hit1(position, size) || hit2(position, size);
+			return hit1(position, size) || hit2(position, size) || hit3(position, size);
 		}
 		
 		
@@ -78,6 +88,13 @@ public class DefaultMessageStoreImpl extends MessageStore {
 				ByteBuffer tmpBuffer = buffer2.duplicate();
 				tmpBuffer.position((int)(position - offset2));
 				tmpBuffer.limit((int)(position - offset2 + buffer.remaining()));
+				buffer.put(tmpBuffer);
+				return;
+			}
+			if (hit3(position, buffer.remaining())) {
+				ByteBuffer tmpBuffer = buffer3.duplicate();
+				tmpBuffer.position((int)(position - offset3));
+				tmpBuffer.limit((int)(position - offset3 + buffer.remaining()));
 				buffer.put(tmpBuffer);
 				return;
 			}
@@ -433,8 +450,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int MAXTHREAD = 100;
     
     private static final int MAXMSG = 2100000000;
-    private static final int N_TSLICE = 2500000;
-    private static final int N_ASLICE = 40;
+    private static final int N_TSLICE = 2000000;
+    private static final int N_ASLICE = 32;
     
     private static final int N_ASLICE2 = 8;
     private static final int N_ASLICE3 = N_ASLICE2 + 1;
