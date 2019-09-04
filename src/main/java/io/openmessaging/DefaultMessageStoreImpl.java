@@ -468,13 +468,57 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final long aSlicePivot[] = new long[N_ASLICE + 1];
     
+    
+    
+    private static final int SHRINKF = 3;
+    
     private static final long aSlice2Pivot[] = new long[N_ASLICE2 + 1];
-    private static final My2DLongArray aAxisCompressedPoint2BaseT = new My2DLongArray(N_TSLICE + 1, N_ASLICE2);
-    private static final My2DLongArray aAxisCompressedPoint2ByteOffset = new My2DLongArray(N_TSLICE + 1, N_ASLICE2);
+    private static My2DLongArray aAxisCompressedPoint2BaseT = new My2DLongArray(N_TSLICE + 1, N_ASLICE2);
+    private static My2DLongArray aAxisCompressedPoint2ByteOffset = new My2DLongArray(N_TSLICE + 1, N_ASLICE2);
+    private static final My2DLongArray aAxisCompressedPoint2BaseTShrink = new My2DLongArray((N_TSLICE + 1) / SHRINKF + 2, N_ASLICE2);
+    private static final My2DLongArray aAxisCompressedPoint2ByteOffsetShrink = new My2DLongArray((N_TSLICE + 1) / SHRINKF + 2, N_ASLICE2);
+    
     
     private static final long aSlice3Pivot[] = new long[N_ASLICE3 + 1];
-    private static final My2DLongArray aAxisCompressedPoint3BaseT = new My2DLongArray(N_TSLICE + 1, N_ASLICE3);
-    private static final My2DLongArray aAxisCompressedPoint3ByteOffset = new My2DLongArray(N_TSLICE + 1, N_ASLICE3);
+    private static My2DLongArray aAxisCompressedPoint3BaseT = new My2DLongArray(N_TSLICE + 1, N_ASLICE3);
+    private static My2DLongArray aAxisCompressedPoint3ByteOffset = new My2DLongArray(N_TSLICE + 1, N_ASLICE3);
+    private static final My2DLongArray aAxisCompressedPoint3BaseTShrink = new My2DLongArray((N_TSLICE + 1) / SHRINKF + 2, N_ASLICE3);
+    private static final My2DLongArray aAxisCompressedPoint3ByteOffsetShrink = new My2DLongArray((N_TSLICE + 1) / SHRINKF + 2, N_ASLICE3);
+    
+
+    private static int tSliceIdShrink(int x)
+    {
+    	return x < tSliceCount ? x / SHRINKF : (tSliceCount + SHRINKF - 1) / SHRINKF;
+    }
+    
+    private static void doShrink()
+    {
+    	for (int tSliceId = 0; tSliceId < tSliceCount; tSliceId += SHRINKF) {
+    		int tSliceIdZ = tSliceIdShrink(tSliceId);
+    		for (int aSlice2Id = 0; aSlice2Id < N_ASLICE2; aSlice2Id++) {
+    			aAxisCompressedPoint2BaseTShrink.set(tSliceIdZ, aSlice2Id, aAxisCompressedPoint2BaseT.get(tSliceId, aSlice2Id));
+    			aAxisCompressedPoint2ByteOffsetShrink.set(tSliceIdZ, aSlice2Id, aAxisCompressedPoint2ByteOffset.get(tSliceId, aSlice2Id));
+    		}
+    		for (int aSlice3Id = 0; aSlice3Id < N_ASLICE3; aSlice3Id++) {
+    			aAxisCompressedPoint3BaseTShrink.set(tSliceIdZ, aSlice3Id, aAxisCompressedPoint3BaseT.get(tSliceId, aSlice3Id));
+    			aAxisCompressedPoint3ByteOffsetShrink.set(tSliceIdZ, aSlice3Id, aAxisCompressedPoint3ByteOffset.get(tSliceId, aSlice3Id));
+    		}
+    	}
+    	int tSliceId = tSliceCount;
+    	int tSliceIdZ = tSliceIdShrink(tSliceId);
+		for (int aSlice2Id = 0; aSlice2Id < N_ASLICE2; aSlice2Id++) {
+			aAxisCompressedPoint2BaseTShrink.set(tSliceIdZ, aSlice2Id, aAxisCompressedPoint2BaseT.get(tSliceId, aSlice2Id));
+			aAxisCompressedPoint2ByteOffsetShrink.set(tSliceIdZ, aSlice2Id, aAxisCompressedPoint2ByteOffset.get(tSliceId, aSlice2Id));
+		}
+		for (int aSlice3Id = 0; aSlice3Id < N_ASLICE3; aSlice3Id++) {
+			aAxisCompressedPoint3BaseTShrink.set(tSliceIdZ, aSlice3Id, aAxisCompressedPoint3BaseT.get(tSliceId, aSlice3Id));
+			aAxisCompressedPoint3ByteOffsetShrink.set(tSliceIdZ, aSlice3Id, aAxisCompressedPoint3ByteOffset.get(tSliceId, aSlice3Id));
+		}
+    	aAxisCompressedPoint2BaseT = null;
+    	aAxisCompressedPoint2ByteOffset = null;
+    	aAxisCompressedPoint3BaseT = null;
+    	aAxisCompressedPoint3ByteOffset = null;
+    }
     
     private static final My2DIntArray blockOffsetTableCountPrefixSum = new My2DIntArray(N_TSLICE + 2, N_ASLICE + 2);
     private static void incBlockOffsetTableCountPrefixSum(int x, int y) { blockOffsetTableCountPrefixSum.inc(x + 1, y + 1); }
@@ -720,8 +764,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			offsetL += t;
     		}
     	}
-    	
-    	
     }
     
     
@@ -1051,6 +1093,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		aAxisCompressedPoint3Data[i].close();
     		aAxisCompressedPoint3Data[i] = null;
     	}
+    	
     }
     
 
@@ -1381,6 +1424,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
 						
 						externalMergeSort();
 						buildIndex();
+						
+						doShrink();
 						
 						System.gc();
 						MyBufferedFile.init();
@@ -1864,7 +1909,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static void queryAZP2(AverageResult result, boolean doRealQuery, int aSlice2Id, int tSliceLow, int tSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
-    	long nBytes = aAxisCompressedPoint2ByteOffset.get(tSliceHigh + 1, aSlice2Id) - aAxisCompressedPoint2ByteOffset.get(tSliceLow, aSlice2Id);
+    	tSliceHigh = tSliceIdShrink(tSliceHigh);
+    	tSliceLow = tSliceIdShrink(tSliceLow);
+    	
+    	long nBytes = aAxisCompressedPoint2ByteOffsetShrink.get(tSliceHigh + 1, aSlice2Id) - aAxisCompressedPoint2ByteOffsetShrink.get(tSliceLow, aSlice2Id);
 		
     	result.addIOCost(nBytes);
 		if (!doRealQuery) return;
@@ -1872,11 +1920,11 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOBytes += nBytes;
 		
     	ByteBuffer buffer = ByteBuffer.allocate((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
-    	aAxisCompressedPoint2Channel[aSlice2Id].read(buffer, aAxisCompressedPoint2ByteOffset.get(tSliceLow, aSlice2Id));
+    	aAxisCompressedPoint2Channel[aSlice2Id].read(buffer, aAxisCompressedPoint2ByteOffsetShrink.get(tSliceLow, aSlice2Id));
     	buffer.position(0);
     	
     	
-    	long t = aAxisCompressedPoint2BaseT.get(tSliceLow, aSlice2Id);
+    	long t = aAxisCompressedPoint2BaseTShrink.get(tSliceLow, aSlice2Id);
 		while (buffer.hasRemaining()) {
 			t += ValueCompressor.getFromBuffer(buffer);
 			long a = ValueCompressor.getFromBuffer(buffer);
@@ -1910,7 +1958,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static void queryAZP3(AverageResult result, boolean doRealQuery, int aSlice3Id, int tSliceLow, int tSliceHigh, long tMin, long tMax, long aMin, long aMax) throws IOException
     {
-    	long nBytes = aAxisCompressedPoint3ByteOffset.get(tSliceHigh + 1, aSlice3Id) - aAxisCompressedPoint3ByteOffset.get(tSliceLow, aSlice3Id);
+    	tSliceHigh = tSliceIdShrink(tSliceHigh);
+    	tSliceLow = tSliceIdShrink(tSliceLow);
+    	
+    	long nBytes = aAxisCompressedPoint3ByteOffsetShrink.get(tSliceHigh + 1, aSlice3Id) - aAxisCompressedPoint3ByteOffsetShrink.get(tSliceLow, aSlice3Id);
 		
     	result.addIOCost(nBytes);
 		if (!doRealQuery) return;
@@ -1918,10 +1969,10 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		result.aAxisIOBytes += nBytes;
 		
     	ByteBuffer buffer = ByteBuffer.allocate((int)nBytes).order(ByteOrder.LITTLE_ENDIAN);
-    	aAxisCompressedPoint3Channel[aSlice3Id].read(buffer, aAxisCompressedPoint3ByteOffset.get(tSliceLow, aSlice3Id));
+    	aAxisCompressedPoint3Channel[aSlice3Id].read(buffer, aAxisCompressedPoint3ByteOffsetShrink.get(tSliceLow, aSlice3Id));
     	buffer.position(0);
     	
-    	long t = aAxisCompressedPoint3BaseT.get(tSliceLow, aSlice3Id);
+    	long t = aAxisCompressedPoint3BaseTShrink.get(tSliceLow, aSlice3Id);
 		while (buffer.hasRemaining()) {
 			t += ValueCompressor.getFromBuffer(buffer);
 			long a = ValueCompressor.getFromBuffer(buffer);
