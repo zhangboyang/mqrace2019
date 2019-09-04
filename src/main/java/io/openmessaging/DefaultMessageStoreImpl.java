@@ -34,7 +34,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		private static long offset1 = 1L*UNIT;
 		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.75));
 		private static long offset2 = 4L*UNIT;
-		private static final ByteBuffer buffer3 = ByteBuffer.allocate((int)(UNIT*0.5));
+		private static final ByteBuffer buffer3 = ByteBuffer.allocate((int)(UNIT*0.75));
 		private static long offset3 = 8L*UNIT;
 		
 		static {
@@ -455,7 +455,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     private static final int N_ASLICE2 = 8;
     private static final int N_ASLICE3 = N_ASLICE2 + 1;
-    private static final int N_ASLICE4 = N_ASLICE2 + 1;
     
     private static final int TSLICE_INTERVAL = MAXMSG / N_TSLICE;
     
