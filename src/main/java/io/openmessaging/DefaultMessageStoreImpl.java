@@ -30,9 +30,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		private static final int UNIT = 1000*1000*1000;
 		private static final ByteBuffer buffer1 = ByteBuffer.allocate((int)(UNIT*2.0));
 		private static long offset1 = 1L*UNIT;
-		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.6));
+		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.7));
 		private static long offset2 = 4L*UNIT;
-		private static final ByteBuffer buffer3 = ByteBuffer.allocate((int)(UNIT*0.6));
+		private static final ByteBuffer buffer3 = ByteBuffer.allocate((int)(UNIT*0.5));
 		private static long offset3 = 8L*UNIT;
 		
 		static {
@@ -253,6 +253,14 @@ public class DefaultMessageStoreImpl extends MessageStore {
     		long firstbyte = ((int)buffer.get()) & 0xff;
     		if (firstbyte < 0x80) {
     			value = firstbyte;
+    		} else if (0xfc <= firstbyte && firstbyte < 0xfe) {
+    			value = (firstbyte & 0x01) << 48; 
+    			value |= ((long)buffer.get() & 0xff) << 40;
+    			value |= ((long)buffer.get() & 0xff) << 32;
+    			value |= ((long)buffer.get() & 0xff) << 24;
+    			value |= ((long)buffer.get() & 0xff) << 16;
+    			value |= ((long)buffer.get() & 0xff) << 8;
+    			value |= ((long)buffer.get() & 0xff);
     		} else if (firstbyte < 0xc0) {
     			value = (firstbyte & 0x3f) << 8; 
     			value |= ((long)buffer.get() & 0xff);
@@ -273,14 +281,6 @@ public class DefaultMessageStoreImpl extends MessageStore {
     			value |= ((long)buffer.get() & 0xff);
     		} else if (firstbyte < 0xfc) {
     			value = (firstbyte & 0x03) << 40; 
-    			value |= ((long)buffer.get() & 0xff) << 32;
-    			value |= ((long)buffer.get() & 0xff) << 24;
-    			value |= ((long)buffer.get() & 0xff) << 16;
-    			value |= ((long)buffer.get() & 0xff) << 8;
-    			value |= ((long)buffer.get() & 0xff);
-    		} else if (firstbyte < 0xfe) {
-    			value = (firstbyte & 0x01) << 48; 
-    			value |= ((long)buffer.get() & 0xff) << 40;
     			value |= ((long)buffer.get() & 0xff) << 32;
     			value |= ((long)buffer.get() & 0xff) << 24;
     			value |= ((long)buffer.get() & 0xff) << 16;
@@ -448,8 +448,8 @@ public class DefaultMessageStoreImpl extends MessageStore {
     private static final int MAXTHREAD = 100;
     
     private static final int MAXMSG = 2100000000;
-    private static final int N_TSLICE = 2000000;
-    private static final int N_ASLICE = 32;
+    private static final int N_TSLICE = 2500000;
+    private static final int N_ASLICE = 40;
     
     private static final int N_ASLICE2 = 8;
     private static final int N_ASLICE3 = N_ASLICE2 + 1;
@@ -467,7 +467,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     
     
     
-    private static final int SHRINKF = 3;
+    private static final int SHRINKF = 4;
     
     private static final long aSlice2Pivot[] = new long[N_ASLICE2 + 1];
     private static My2DLongArray aAxisCompressedPoint2BaseT = new My2DLongArray(N_TSLICE + 1, N_ASLICE2);
@@ -1406,7 +1406,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     @Override
     public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {
 
-    	boolean firstFlag = false;
+//    	boolean firstFlag = false;
     	
     	if (state == 1) {
     		synchronized (stateLock) {
@@ -1439,7 +1439,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				
     				System.gc();
 
-    				firstFlag = true;
+//    				firstFlag = true;
     				
     				state = 2;
     			}
@@ -1520,19 +1520,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
 		
 		
-		if (firstFlag) {
-			// 预热JVM
-			System.out.println("[" + new Date() + "]: prepare JVM for stage3 started");
-			for (forcePlanId = 0; forcePlanId < MAXPLAN; forcePlanId++) {
-				for (int i = 0; i < 10000; i++) {
-					getAvgValue(aMin, aMax, tMin, tMax);
-				}
-			}
-			forcePlanId = -1;
-			resetQueryStatistics();
-			System.gc();
-			System.out.println("[" + new Date() + "]: prepare JVM for stage3 finished");
-		}
+//		if (firstFlag) {
+//			// 预热JVM
+//			System.out.println("[" + new Date() + "]: prepare JVM for stage3 started");
+//			for (forcePlanId = 0; forcePlanId < MAXPLAN; forcePlanId++) {
+//				for (int i = 0; i < 10000; i++) {
+//					getAvgValue(aMin, aMax, tMin, tMax);
+//				}
+//			}
+//			forcePlanId = -1;
+//			resetQueryStatistics();
+//			System.gc();
+//			System.out.println("[" + new Date() + "]: prepare JVM for stage3 finished");
+//		}
 		
 		
     	return result;
