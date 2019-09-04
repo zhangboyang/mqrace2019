@@ -5,7 +5,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.lang.reflect.Field;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -19,7 +18,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.DoubleAdder;
-import sun.misc.Unsafe;
 
 /**
  * 这是一个简单的基于内存的实现，以方便选手理解题意；
@@ -32,9 +30,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		private static final int UNIT = 1000*1000*1000;
 		private static final ByteBuffer buffer1 = ByteBuffer.allocate((int)(UNIT*2.0));
 		private static long offset1 = 1L*UNIT;
-		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.75));
+		private static final ByteBuffer buffer2 = ByteBuffer.allocateDirect((int)(UNIT*1.6));
 		private static long offset2 = 4L*UNIT;
-		private static final ByteBuffer buffer3 = ByteBuffer.allocate((int)(UNIT*0.75));
+		private static final ByteBuffer buffer3 = ByteBuffer.allocate((int)(UNIT*0.6));
 		private static long offset3 = 8L*UNIT;
 		
 		static {
@@ -1036,9 +1034,9 @@ public class DefaultMessageStoreImpl extends MessageStore {
     {
     	reserveDiskSpace(tAxisPointFile, (long)globalTotalRecords * 16);
     	reserveDiskSpace(tAxisCompressedPointFile, (long)globalTotalRecords * 10);
-    	tAxisPointStream = new BufferedOutputStream(new FileOutputStream(tAxisPointFile));
-    	tAxisBodyStream = new BufferedOutputStream(new FileOutputStream(tAxisBodyFile));
-    	tAxisCompressedPointStream = new BufferedOutputStream(new FileOutputStream(tAxisCompressedPointFile));
+    	tAxisPointStream = new BufferedOutputStream(new FileOutputStream(tAxisPointFile), BUFSZ);
+    	tAxisBodyStream = new BufferedOutputStream(new FileOutputStream(tAxisBodyFile), BUFSZ);
+    	tAxisCompressedPointStream = new BufferedOutputStream(new FileOutputStream(tAxisCompressedPointFile), BUFSZ);
     	
     	writeBodyData();
     }
@@ -1408,7 +1406,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     @Override
     public List<Message> getMessage(long aMin, long aMax, long tMin, long tMax) {
 
-//    	boolean firstFlag = false;
+    	boolean firstFlag = false;
     	
     	if (state == 1) {
     		synchronized (stateLock) {
@@ -1441,7 +1439,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
     				
     				System.gc();
 
-//    				firstFlag = true;
+    				firstFlag = true;
     				
     				state = 2;
     			}
@@ -1522,18 +1520,19 @@ public class DefaultMessageStoreImpl extends MessageStore {
 
 		
 		
-//		if (firstFlag) {
-//			// 预热JVM
-//			System.out.println("[" + new Date() + "]: prepare JVM for stage3 started");
-//			for (forcePlanId = 0; forcePlanId < MAXPLAN; forcePlanId++) {
-//				for (int i = 0; i < 10000; i++) {
-//					getAvgValue(aMin, aMax, tMin, tMax);
-//				}
-//			}
-//			forcePlanId = -1;
-//			resetQueryStatistics();
-//			System.out.println("[" + new Date() + "]: prepare JVM for stage3 finished");
-//		}
+		if (firstFlag) {
+			// 预热JVM
+			System.out.println("[" + new Date() + "]: prepare JVM for stage3 started");
+			for (forcePlanId = 0; forcePlanId < MAXPLAN; forcePlanId++) {
+				for (int i = 0; i < 10000; i++) {
+					getAvgValue(aMin, aMax, tMin, tMax);
+				}
+			}
+			forcePlanId = -1;
+			resetQueryStatistics();
+			System.gc();
+			System.out.println("[" + new Date() + "]: prepare JVM for stage3 finished");
+		}
 		
 		
     	return result;
@@ -2072,6 +2071,7 @@ public class DefaultMessageStoreImpl extends MessageStore {
 		for (int i = 0; i < MAXPLAN; i++) {
 			planCount.set(i, 0);
 		}
+		totalCacheHit.set(0);
 	}
 	
     @Override
