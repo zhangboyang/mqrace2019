@@ -7,7 +7,7 @@ import io.openmessaging.util.Compact2DLongArray;
 
 public class IndexMetadata {
 
-	/////// t分片的元数据
+    /////// t分片的元数据
     static final int tSliceRecordCount[] = new int[N_TSLICE + 1];  // 每一个t分片内的记录数量
     static final int tSliceRecordOffset[] = new int[N_TSLICE + 1]; // 对应t分片在文件中的偏移（按记录数计）；实质上相当于tSliceRecordCount[]的前缀和
     
@@ -24,14 +24,14 @@ public class IndexMetadata {
     static int getBlockOffsetTableCountPrefixSum(int x, int y) { return blockRecordCountPrefixSum.get(x + 1, y + 1); }
     static int blockOffsetTableAxisT(int x, int y)
     {
-    	return getBlockOffsetTableCountPrefixSum(x - 1, N_ASLICE) +
-    			(getBlockOffsetTableCountPrefixSum(x, y - 1) - getBlockOffsetTableCountPrefixSum(x - 1, y - 1));
+        return getBlockOffsetTableCountPrefixSum(x - 1, N_ASLICE) +
+                (getBlockOffsetTableCountPrefixSum(x, y - 1) - getBlockOffsetTableCountPrefixSum(x - 1, y - 1));
     }
     static int blockOffsetTableAxisA(int x, int y)
     {
-    	return getBlockOffsetTableCountPrefixSum(tSliceCount, y - 1) +
-    			(getBlockOffsetTableCountPrefixSum(x - 1, y) - getBlockOffsetTableCountPrefixSum(x - 1, y - 1)) +
-    			(y * (tSliceCount + 1) + x);
+        return getBlockOffsetTableCountPrefixSum(tSliceCount, y - 1) +
+                (getBlockOffsetTableCountPrefixSum(x - 1, y) - getBlockOffsetTableCountPrefixSum(x - 1, y - 1)) +
+                (y * (tSliceCount + 1) + x);
     }
     
     

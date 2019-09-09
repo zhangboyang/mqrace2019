@@ -17,9 +17,9 @@ import java.util.Date;
 
 public class FileStorageManager {
 
-	// 写文件时的缓存大小
-	//  如果设置过小，可能会造成文件在磁盘上存储不连续，影响IO性能（此处存疑，待验证）
-	//  如果设置过大，则会占用大量内存
+    // 写文件时的缓存大小
+    //  如果设置过小，可能会造成文件在磁盘上存储不连续，影响IO性能（此处存疑，待验证）
+    //  如果设置过大，则会占用大量内存
     private static final int BUFSZ = 1024 * 1024 * 64;
     
     
@@ -45,39 +45,39 @@ public class FileStorageManager {
     static final FileChannel aAxisIndexChannel;
 
     static {
-    	RandomAccessFile tpFile, tbFile, tzpFile, aIndexFile;
-    	FileChannel tpChannel, tbChannel, tzpChannel, aIndexChannel;
-    	try {
-			tpFile = new RandomAccessFile(tAxisPointFile, "rw");
-			tpFile.setLength(0);
-			tbFile = new RandomAccessFile(tAxisBodyFile, "rw");
-			tbFile.setLength(0);
-			tzpFile = new RandomAccessFile(tAxisCompressedPointFile, "rw");
-			tzpFile.setLength(0);
-			aIndexFile = new RandomAccessFile(aAxisIndexFile, "rw");
-			aIndexFile.setLength(0);
-			
-			tpChannel = FileChannel.open(Paths.get(tAxisPointFile));
-			tbChannel = FileChannel.open(Paths.get(tAxisBodyFile));
-			tzpChannel = FileChannel.open(Paths.get(tAxisCompressedPointFile));
-			aIndexChannel = FileChannel.open(Paths.get(aAxisIndexFile));
-			
-		} catch (IOException e) {
-			tpFile = null;
-			tbFile = null;
-			tzpFile = null;
-			aIndexFile = null;
-			tpChannel = null;
-			tbChannel = null;
-			tzpChannel = null;
-			aIndexChannel = null;
-			e.printStackTrace();
-			System.exit(-1);
-		}
-    	tAxisPointData = tpFile;
-    	tAxisBodyData = tbFile;
-    	tAxisCompressedPointData = tzpFile;
-    	aAxisIndexData = aIndexFile;
+        RandomAccessFile tpFile, tbFile, tzpFile, aIndexFile;
+        FileChannel tpChannel, tbChannel, tzpChannel, aIndexChannel;
+        try {
+            tpFile = new RandomAccessFile(tAxisPointFile, "rw");
+            tpFile.setLength(0);
+            tbFile = new RandomAccessFile(tAxisBodyFile, "rw");
+            tbFile.setLength(0);
+            tzpFile = new RandomAccessFile(tAxisCompressedPointFile, "rw");
+            tzpFile.setLength(0);
+            aIndexFile = new RandomAccessFile(aAxisIndexFile, "rw");
+            aIndexFile.setLength(0);
+            
+            tpChannel = FileChannel.open(Paths.get(tAxisPointFile));
+            tbChannel = FileChannel.open(Paths.get(tAxisBodyFile));
+            tzpChannel = FileChannel.open(Paths.get(tAxisCompressedPointFile));
+            aIndexChannel = FileChannel.open(Paths.get(aAxisIndexFile));
+            
+        } catch (IOException e) {
+            tpFile = null;
+            tbFile = null;
+            tzpFile = null;
+            aIndexFile = null;
+            tpChannel = null;
+            tbChannel = null;
+            tzpChannel = null;
+            aIndexChannel = null;
+            e.printStackTrace();
+            System.exit(-1);
+        }
+        tAxisPointData = tpFile;
+        tAxisBodyData = tbFile;
+        tAxisCompressedPointData = tzpFile;
+        aAxisIndexData = aIndexFile;
         tAxisPointChannel = tpChannel;
         tAxisBodyChannel = tbChannel;
         tAxisCompressedPointChannel = tzpChannel;
@@ -97,44 +97,44 @@ public class FileStorageManager {
     static long aAxisCompressedPoint3OutputBytes = 0;
     
     static {
-    	try {
-	    	for (int i = 0; i < N_ASLICE2; i++) {
-	    		String fn = storagePath + String.format("aAxis.zp2.%04d.data", i);
-	    		aAxisCompressedPoint2Data[i] = new BufferedOutputStream(new FileOutputStream(fn), BUFSZ);
-	    		aAxisCompressedPoint2Channel[i] = FileChannel.open(Paths.get(fn));
-	    	}
-	    	for (int i = 0; i < N_ASLICE3; i++) {
-	    		String fn = storagePath + String.format("aAxis.zp3.%04d.data", i);
-	    		aAxisCompressedPoint3Data[i] = new BufferedOutputStream(new FileOutputStream(fn), BUFSZ);
-	    		aAxisCompressedPoint3Channel[i] = FileChannel.open(Paths.get(fn));
-	    	}
-    	} catch (IOException e) {
-    		e.printStackTrace();
-    		System.exit(-1);
-    	}
+        try {
+            for (int i = 0; i < N_ASLICE2; i++) {
+                String fn = storagePath + String.format("aAxis.zp2.%04d.data", i);
+                aAxisCompressedPoint2Data[i] = new BufferedOutputStream(new FileOutputStream(fn), BUFSZ);
+                aAxisCompressedPoint2Channel[i] = FileChannel.open(Paths.get(fn));
+            }
+            for (int i = 0; i < N_ASLICE3; i++) {
+                String fn = storagePath + String.format("aAxis.zp3.%04d.data", i);
+                aAxisCompressedPoint3Data[i] = new BufferedOutputStream(new FileOutputStream(fn), BUFSZ);
+                aAxisCompressedPoint3Channel[i] = FileChannel.open(Paths.get(fn));
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+            System.exit(-1);
+        }
     }
     
     
 
-	// 为给定文件保留*连续*磁盘空间
-	static void reserveDiskSpace(String fileName, long nBytes) throws IOException
-	{
-		System.out.println("[" + new Date() + "]: " + String.format("reserveDiskSpace: file=%s size=%d", fileName, nBytes));
+    // 为给定文件保留*连续*磁盘空间
+    static void reserveDiskSpace(String fileName, long nBytes) throws IOException
+    {
+        System.out.println("[" + new Date() + "]: " + String.format("reserveDiskSpace: file=%s size=%d", fileName, nBytes));
 
-		byte zeros[] = new byte[4096];
-		RandomAccessFile fp = new RandomAccessFile(fileName, "rw");
-		// 理论上，用fallocate()系统调用，可以不用写数据而达到预留磁盘空间的目的，但Java8不支持
-		// 所以这里使用向文件填0的方法
-//		fp.setLength(0);
-//		while (nBytes > 0) {
-//			int nWrite = (int) Math.min(nBytes, zeros.length);
-//			fp.write(zeros, 0, nWrite);
-//			nBytes -= nWrite;
-//		}
-		fp.setLength(nBytes); // FIXME:填0太耗时间了，暂时用setLength代替吧
-		fp.close();
-		System.out.println("[" + new Date() + "]: reserveDiskSpace: done");
-	}
-	
+        byte zeros[] = new byte[4096];
+        RandomAccessFile fp = new RandomAccessFile(fileName, "rw");
+        // 理论上，用fallocate()系统调用，可以不用写数据而达到预留磁盘空间的目的，但Java8不支持
+        // 所以这里使用向文件填0的方法
+//      fp.setLength(0);
+//      while (nBytes > 0) {
+//          int nWrite = (int) Math.min(nBytes, zeros.length);
+//          fp.write(zeros, 0, nWrite);
+//          nBytes -= nWrite;
+//      }
+        fp.setLength(nBytes); // FIXME:填0太耗时间了，暂时用setLength代替吧
+        fp.close();
+        System.out.println("[" + new Date() + "]: reserveDiskSpace: done");
+    }
+    
 
 }
