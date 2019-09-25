@@ -1,4 +1,4 @@
-![swkl](swkl.gif)
+![击掌](jz.gif)
 
 >写在前面: 
 > 1.在开始coding前请仔细阅读以下内容
